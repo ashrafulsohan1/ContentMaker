@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}ContentMaker — Confirm{% endblock %}
+{% block content %}
+<p class="steps">Step 4 of 4 — Estimate &amp; confirm</p>
+<h2>Confirm before any paid call</h2>
+{% if flow.options.dry_run %}
+<div class="notice">Dry run: mock engines will fake every asset — no network calls, no spend.</div>
+{% endif %}
+<table>
+  <tr><th>Setting</th><th>Value</th></tr>
+  <tr><td>Project</td><td>{{ flow.project.name }} (<code>{{ flow.project.slug }}</code>)</td></tr>
+  <tr><td>Platform / format</td><td>{{ platform_label }} / {{ format_label }}</td></tr>
+  <tr><td>Beats</td><td>{{ flow.beats | length }}</td></tr>
+  <tr><td>Audio</td><td>{{ "on — voice " + flow.options.voice if flow.options.audio and flow.options.voice else ("on" if flow.options.audio else "off") }}</td></tr>
+  <tr><td>Visuals</td><td>{{ flow.options.visual }}</td></tr>
+  {% if flow.options.style %}<tr><td>Visual style</td><td>{{ flow.options.style }}</td></tr>{% endif %}
+  <tr><td>Engines → providers</td><td>
+    {% for pair in provider_pairs %}{{ pair.engine }}: {{ pair.provider }}{{ ", " if not loop.last }}{% endfor %}
+  </td></tr>
+  <tr><td>Spend cap</td><td>{{ cap_display }}</td></tr>
+</table>
+
+<h2>Cost estimate</h2>
+<table>
+  <tr><th>Asset</th><th>Beat</th><th>Estimated cost</th></tr>
+  {% for row in rows %}
+  <tr><td>{{ row.kind }}</td><td>{{ row.beat }}</td><td>{{ row.cost }}</td></tr>
+  {% endfor %}
+  <tr><th>Total</th><th></th><th>{{ total }}</th></tr>
+</table>
+<p class="hint">Estimates round usage up, so real spend should not exceed them.
+   Nothing has been spent yet — generation starts only after you confirm.</p>
+
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+<div class="actions-row">
+  <form method="post" action="/jobs/{{ job.id }}/confirm">
+    <button type="submit">Confirm &amp; generate</button>
+  </form>
+  <a href="/options">← Change options</a>
+  <a href="/review">← Review beats</a>
+</div>
+{% endblock %}

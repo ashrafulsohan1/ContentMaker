@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}ContentMaker — Review beats{% endblock %}
+{% block content %}
+<p class="steps">Step 2 of 4 — Beat review</p>
+<h2>Review beats</h2>
+<p>{{ beats_total }} beat{{ "" if beats_total == 1 else "s" }} in {{ flow.project.name }}.
+   Edit text, merge a beat into the next one, or split it into sentences — then continue.</p>
+{% include "_beat_list.html" %}
+<div class="actions-row">
+  <a href="/options">Choose output options →</a>
+</div>
+{% endblock %}

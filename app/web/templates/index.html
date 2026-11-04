@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}ContentMaker — New script{% endblock %}
+{% block content %}
+<p class="steps">Step 1 of 4 — Script input</p>
+<h2>Start a new piece</h2>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+{% if notice %}<div class="notice">{{ notice }}</div>{% endif %}
+<form method="post" action="/input">
+  <fieldset>
+    <legend>Project</legend>
+    <label for="project">Project name</label>
+    <input type="text" id="project" name="project" required
+           placeholder="e.g. Morning walk launch">
+    <p class="hint">Becomes the project folder name. Any language works.</p>
+  </fieldset>
+  <fieldset>
+    <legend>Script</legend>
+    <label for="script">Paste your script</label>
+    <textarea id="script" name="script" rows="12"
+              placeholder="Blank lines separate beats. Optional markers:&#10;[scene: label] starts a named beat&#10;&lt;!-- img: what the visual should show --&gt;"></textarea>
+    <label for="script_file">…or upload a .txt / .md file (overrides pasted text)</label>
+    <input type="file" id="script_file" name="script_file" accept=".txt,.md,text/plain,text/markdown">
+  </fieldset>
+  <button type="submit">Segment into beats →</button>
+</form>
+{% endblock %}

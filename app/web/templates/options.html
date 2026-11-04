@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}ContentMaker — Options{% endblock %}
+{% block content %}
+<p class="steps">Step 3 of 4 — Output options</p>
+<h2>Choose output options</h2>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+{% if errors %}
+<ul class="errors">
+  {% for message in errors %}<li>{{ message }}</li>{% endfor %}
+</ul>
+{% endif %}
+<form method="post" action="/options">
+  <fieldset>
+    <legend>Platform &amp; format</legend>
+    <label for="platform-select">Platform</label>
+    <select id="platform-select" name="platform_id"
+            hx-get="/options/formats" hx-target="#format-slot" hx-include="self" hx-trigger="change">
+      {% for platform in platforms %}
+      <option value="{{ platform.id }}" {% if platform.id == platform_id %}selected{% endif %}>{{ platform.name }}</option>
+      {% endfor %}
+    </select>
+    <label for="format-select">Format</label>
+    <div id="format-slot">{% include "_formats.html" %}</div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Style preset</legend>
+    <label for="preset-select">Preset (optional)</label>
+    <select id="preset-select" name="preset_id">
+      <option value="" {% if not preset_id %}selected{% endif %}>No preset — set options manually</option>
+      {% for preset in presets %}
+      <option value="{{ preset.id }}" {% if preset.id == preset_id %}selected{% endif %}>{{ preset.label }}</option>
+      {% endfor %}
+    </select>
+    {% if preset_id and selected_preset %}<p class="hint">{{ selected_preset.description }}</p>{% endif %}
+    <label for="style">Visual style</label>
+    <input type="text" id="style" name="style" value="{{ style or '' }}"
+           placeholder="e.g. flat vector illustration, warm palette">
+  </fieldset>
+
+  <fieldset>
+    <legend>Audio</legend>
+    <div class="check">
+      <input type="checkbox" id="audio" name="audio" {% if audio %}checked{% endif %}>
+      <label for="audio">Generate voiceover audio (one clip per beat)</label>
+    </div>
+    <label for="voice">Voice</label>
+    <input type="text" id="voice" name="voice" value="{{ voice or '' }}" placeholder="provider voice name">
+    <label for="pace">Pace (1.0 = normal)</label>
+    <input type="number" id="pace" name="pace" step="0.05" min="0.1" max="3" value="{{ pace }}">
+    <label for="tone">Tone</label>
+    <input type="text" id="tone" name="tone" value="{{ tone or '' }}" placeholder="e.g. conversational">
+  </fieldset>
+
+  <fieldset>
+    <legend>Visuals</legend>
+    <label for="visual">Visual type</label>
+    <select id="visual" name="visual">
+      <option value="none" {% if visual == "none" %}selected{% endif %}>No visuals</option>
+      <option value="images" {% if visual == "images" %}selected{% endif %}>Images (one per beat)</option>
+      <option value="video" {% if visual == "video" %}selected{% endif %}>Video clips (one per beat)</option>
+    </select>
+  </fieldset>
+
+  <fieldset>
+    <legend>Engines</legend>
+    <table>
+      <tr><th>Engine</th><th>Available providers</th><th>Needed</th></tr>
+      {% for engine in engines %}
+      <tr>
+        <td>{{ engine }}</td>
+        <td>
+          {% if availability[engine] %}{{ availability[engine] | join(", ") }}
+          {% else %}<span class="error">not available — add an API key in Settings</span>{% endif %}
+        </td>
+        <td>{% if engine in needed %}yes{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </fieldset>
+
+  <fieldset>
+    <legend>Spend guardrails</legend>
+    <div class="check">
+      <input type="checkbox" id="dry_run" name="dry_run" {% if dry_run %}checked{% endif %}>
+      <label for="dry_run">Dry run — mock engines, zero network, zero spend</label>
+    </div>
+    <label for="spend_cap_usd">Hard spend cap for this job, USD (optional)</label>
+    <input type="number" id="spend_cap_usd" name="spend_cap_usd" step="0.01" min="0"
+           value="{{ '' if spend_cap_usd is none else spend_cap_usd }}">
+  </fieldset>
+
+  <button type="submit">Estimate cost →</button>
+</form>
+{% endblock %}

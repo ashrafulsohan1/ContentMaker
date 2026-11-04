@@ -1,0 +1,37 @@
+{
+  "_meta": {
+    "description": "Style presets — editable config (PROMPT §2/§8). A preset is a named bundle of style options: one visual style for image prompts plus default voice settings for TTS. The options UI lists these; the user can override any value.",
+    "voice": "voice/pace/tone are provider-agnostic starting values; real voice ids are validated by the selected TTS provider (M2).",
+    "pace": "speaking pace multiplier, 0.1–3.0 (1.0 = provider default)"
+  },
+  "presets": [
+    {
+      "id": "clean-minimal",
+      "label": "Clean minimal",
+      "description": "Minimal typographic visuals on plain backgrounds; clear, steady narration.",
+      "visual_style": "minimal typographic poster, flat plain background, generous whitespace, one accent color",
+      "voice": { "voice": "clear", "pace": 1.0, "tone": "neutral" }
+    },
+    {
+      "id": "photoreal",
+      "label": "Photorealistic",
+      "description": "Photorealistic imagery with natural light; warm, conversational narration.",
+      "visual_style": "photorealistic photography, natural lighting, shallow depth of field, realistic textures",
+      "voice": { "voice": "warm", "pace": 1.0, "tone": "conversational" }
+    },
+    {
+      "id": "flat-illustration",
+      "label": "Flat illustration",
+      "description": "Flat vector-style illustration with a consistent palette; upbeat narration.",
+      "visual_style": "flat vector illustration, consistent two-tone palette, simple geometric shapes, no outlines",
+      "voice": { "voice": "energetic", "pace": 1.1, "tone": "upbeat" }
+    },
+    {
+      "id": "bold-3d",
+      "label": "Bold 3D render",
+      "description": "Glossy 3D-rendered scenes with dramatic light; calm, authoritative narration.",
+      "visual_style": "3D render, soft studio lighting, glossy materials, dramatic rim light, single hero subject",
+      "voice": { "voice": "deep", "pace": 0.95, "tone": "authoritative" }
+    }
+  ]
+}

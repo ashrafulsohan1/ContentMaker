@@ -1,0 +1,9 @@
+<select id="format-select" name="format_id">
+  {% for format in formats %}
+  <option value="{{ format.id }}" {% if format.id == format_id %}selected{% endif %}>
+    {{ format.label }} — {{ format.aspect[0] }}:{{ format.aspect[1] }}, {{ format.resolution[0] }}×{{ format.resolution[1] }}{{ ", max " + format.max_duration_s|string + "s" if format.max_duration_s else "" }}
+  </option>
+  {% else %}
+  <option value="">Choose a platform first</option>
+  {% endfor %}
+</select>

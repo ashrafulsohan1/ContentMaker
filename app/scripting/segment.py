@@ -17,6 +17,11 @@ DEFAULT_MAX_BEAT_CHARS = 280  # ≈ 18s of voiceover at a moderate pace
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?…])\s+")
 
 
+def split_into_sentences(text: str) -> list[str]:
+    """Whole sentences of ``text`` in order (review-UI split helper, 1.10)."""
+    return [sentence for sentence in _SENTENCE_BOUNDARY.split(text) if sentence.strip()]
+
+
 def _split_by_sentence(text: str, max_chars: int) -> list[str]:
     sentences = _SENTENCE_BOUNDARY.split(text)
     chunks: list[str] = []
