@@ -1,8 +1,9 @@
-"""JSON API: read-only job status (BUILD_PLAN 1.10).
+"""JSON API: read-only job status (BUILD_PLAN 1.10, extended by 1.11).
 
-The UI and the future SSE monitor (task 1.11) read job state here instead of
+The UI, the SSE monitor and any API client read job state here instead of
 scraping HTML. Mutations (estimate / confirm / cancel / retry) are driven by
-the web flow and job engine; this router only reports what is persisted.
+the web flow and job engine; this router only reports what is persisted, plus
+the derived per-job progress the monitor displays.
 """
 from __future__ import annotations
 
@@ -15,8 +16,16 @@ from app.core.jobs import Job, JobEngine, JobNotFound
 router = APIRouter(prefix="/api")
 
 
+def job_progress(job: Job) -> dict[str, int]:
+    """Overall monitor progress: done assets / total assets, as a percent."""
+    total = len(job.assets)
+    done = sum(1 for asset in job.assets if asset.status == "done")
+    percent = round(100 * done / total) if total else 0
+    return {"total": total, "done": done, "percent": percent}
+
+
 def job_payload(job: Job) -> dict[str, Any]:
-    """One job as JSON: lifecycle fields plus the per-asset rows."""
+    """One job as JSON: lifecycle fields plus the per-asset rows + progress."""
     return {
         "id": job.id,
         "project": job.project,
@@ -28,6 +37,7 @@ def job_payload(job: Job) -> dict[str, Any]:
         "spent_usd": job.spent_usd,
         "estimate_usd": job.estimate_usd,
         "error": job.error,
+        "progress": job_progress(job),
         "assets": [
             {
                 "id": asset.id,

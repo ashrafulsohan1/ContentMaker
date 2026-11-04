@@ -10,12 +10,18 @@ by the job engine (§6.6).
 The estimate + explicit confirm gate (§6.6) is structural: ``POST /options``
 creates the job in ``draft`` and immediately estimates it
 (``awaiting_confirmation``); only ``POST /jobs/{id}/confirm`` starts it.
+
+The job monitor (§8, task 1.11) renders per-asset status rows, overall
+progress, running spend, a cancel button and per-asset retry buttons — always
+from the persisted state, so a plain reload reattaches to the running job; with
+JS enabled, ``/static/monitor.js`` streams the SSE feed (``app.api.sse``).
 """
 from __future__ import annotations
 
 import html
 import math
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, HTTPException, Request
@@ -23,8 +29,15 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from starlette.datastructures import FormData, UploadFile
 
-from app.api.jobs import engine_of
-from app.core.jobs import IllegalTransition, JobEngine, JobNotFound
+from app.api.jobs import engine_of, job_progress
+from app.core.jobs import (
+    TERMINAL_JOB_STATUSES,
+    AssetNotFound,
+    IllegalTransition,
+    Job,
+    JobEngine,
+    JobNotFound,
+)
 from app.core.projects import ProjectError, create_project
 from app.data.presets import PresetError, load_presets
 from app.data.specs import FormatSpec, load_platforms, lookup_format
@@ -494,20 +507,99 @@ def confirm_job(job_id: str, request: Request):
     return RedirectResponse(f"/jobs/{job_id}", status_code=303)
 
 
-@router.get("/jobs/{job_id}")
-def job_page(job_id: str, request: Request):
+# --- job monitor (BUILD_PLAN 1.11, spec §6.6/§8) ------------------------------------
+#
+# The page always renders the persisted state, so a plain reload reattaches to
+# the running job; with JS, /static/monitor.js attaches to the SSE stream
+# (GET /api/jobs/{id}/events) and mirrors every snapshot into this DOM.
+# Cancel + per-asset retry are plain form posts (htmx gets the fragment back).
+
+RETRYABLE_JOB_STATUSES = ("running", "partial", "failed", "completed")
+
+
+def _fetch_job(request: Request, job_id: str) -> Job:
     try:
-        job = engine_of(request).job(job_id)
+        return engine_of(request).job(job_id)
     except JobNotFound:
         raise HTTPException(status_code=404, detail=f"no job with id '{job_id}'") from None
-    return templates.TemplateResponse(
-        request,
-        "job.html",
-        {
-            "job": job,
-            "estimate_display": _usd(job.estimate_usd),
-            "spent_display": _usd(job.spent_usd),
-            "cap_display": "no cap" if job.spend_cap_usd is None else _usd(job.spend_cap_usd),
-            "asset_costs": {asset.id: _usd(asset.spent_usd) for asset in job.assets},
-        },
-    )
+
+
+def _monitor_context(job: Job) -> dict[str, Any]:
+    return {
+        "job": job,
+        "terminal": job.status in TERMINAL_JOB_STATUSES,
+        "cancellable": job.status not in TERMINAL_JOB_STATUSES,
+        "job_retries": job.status in RETRYABLE_JOB_STATUSES,
+        "progress": job_progress(job),
+        "estimate_display": _usd(job.estimate_usd),
+        "spent_display": _usd(job.spent_usd),
+        "cap_display": "no cap" if job.spend_cap_usd is None else _usd(job.spend_cap_usd),
+        "asset_costs": {asset.id: _usd(asset.spent_usd) for asset in job.assets},
+    }
+
+
+def _monitor_render(
+    request: Request,
+    job: Job,
+    *,
+    status_code: int = 200,
+    notice: str | None = None,
+    error: str | None = None,
+):
+    """Full monitor page for plain requests; the #monitor fragment for htmx."""
+    context = _monitor_context(job) | {"notice": notice, "error": error}
+    template = "_monitor.html" if request.headers.get("HX-Request") else "job.html"
+    return templates.TemplateResponse(request, template, context, status_code=status_code)
+
+
+def _monitor_response(
+    request: Request,
+    job: Job,
+    *,
+    status_code: int = 200,
+    notice: str | None = None,
+    error: str | None = None,
+):
+    """Outcome of a monitor POST: 303 back to the monitor for plain forms, the
+    updated #monitor fragment for htmx requests. Non-200 outcomes render the
+    page (or fragment) with the error banner — the persisted state is the
+    truth the user needs to see."""
+    if status_code == 200 and not request.headers.get("HX-Request"):
+        return RedirectResponse(f"/jobs/{job.id}", status_code=303)
+    return _monitor_render(request, job, status_code=status_code, notice=notice, error=error)
+
+
+@router.get("/jobs/{job_id}")
+def job_page(job_id: str, request: Request):
+    job = _fetch_job(request, job_id)
+    return _monitor_render(request, job)
+
+
+@router.post("/jobs/{job_id}/cancel")
+def cancel_job(job_id: str, request: Request):
+    engine = engine_of(request)
+    try:
+        job = engine.cancel(job_id)
+    except JobNotFound:
+        raise HTTPException(status_code=404, detail=f"no job with id '{job_id}'") from None
+    except ValueError as exc:  # IllegalTransition: the job is already terminal
+        job = _fetch_job(request, job_id)
+        return _monitor_response(request, job, status_code=409, error=str(exc))
+    return _monitor_response(request, job, notice="Job cancelled — completed assets are kept.")
+
+
+@router.post("/jobs/{job_id}/assets/{asset_id}/retry")
+def retry_asset(job_id: str, asset_id: int, request: Request):
+    engine = engine_of(request)
+    try:
+        job = engine.retry_asset(job_id, asset_id)
+    except JobNotFound:
+        raise HTTPException(status_code=404, detail=f"no job with id '{job_id}'") from None
+    except AssetNotFound:
+        raise HTTPException(
+            status_code=404, detail=f"no asset with id {asset_id} in job '{job_id}'"
+        ) from None
+    except ValueError as exc:  # not failed|skipped, or the asset belongs to another job
+        job = _fetch_job(request, job_id)
+        return _monitor_response(request, job, status_code=409, error=str(exc))
+    return _monitor_response(request, job, notice=f"Asset {asset_id} re-queued for generation.")

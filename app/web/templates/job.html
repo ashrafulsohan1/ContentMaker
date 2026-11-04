@@ -1,31 +1,6 @@
 {% extends "base.html" %}
 {% block title %}ContentMaker — Job {{ job.id }}{% endblock %}
 {% block content %}
-<h2>Job {{ job.id }}</h2>
-<p>Status: <strong>{{ job.status }}</strong>{% if job.error %} — {{ job.error }}{% endif %}</p>
-<table>
-  <tr><th>Estimated</th><th>Spent</th><th>Cap</th><th>Updated</th></tr>
-  <tr>
-    <td>{{ estimate_display }}</td>
-    <td>{{ spent_display }}</td>
-    <td>{{ cap_display }}</td>
-    <td>{{ job.updated_at }}</td>
-  </tr>
-</table>
-<h2>Assets</h2>
-<table>
-  <tr><th>#</th><th>Kind</th><th>Beat</th><th>Status</th><th>Attempts</th><th>Cost</th><th>Error</th></tr>
-  {% for asset in job.assets %}
-  <tr>
-    <td>{{ asset.id }}</td>
-    <td>{{ asset.kind }}</td>
-    <td>{{ asset.beat_index }}</td>
-    <td>{{ asset.status }}</td>
-    <td>{{ asset.attempts }}</td>
-    <td>{{ asset_costs[asset.id] }}</td>
-    <td>{{ asset.error or "" }}</td>
-  </tr>
-  {% endfor %}
-</table>
-<p class="hint"><a href="/jobs/{{ job.id }}">Refresh</a> — live per-asset progress arrives with the job monitor.</p>
+{% include "_monitor.html" %}
 {% endblock %}
+{% block scripts %}<script src="/static/monitor.js" defer></script>{% endblock %}

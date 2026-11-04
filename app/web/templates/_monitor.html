@@ -1,0 +1,58 @@
+<div id="monitor"
+     data-job-id="{{ job.id }}"
+     data-terminal="{{ "1" if terminal else "0" }}">
+  <p class="steps">Job monitor</p>
+  <h2>Job {{ job.id }}</h2>
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  {% if notice %}<div class="notice">{{ notice }}</div>{% endif %}
+  <p>Status: <strong id="job-status">{{ job.status }}</strong>
+     {% if job.error %}— <span id="job-error">{{ job.error }}</span>{% endif %}</p>
+  <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100"
+       aria-valuenow="{{ progress.percent }}">
+    <div class="progress-fill" id="job-progress-fill" style="width: {{ progress.percent }}%"></div>
+  </div>
+  <p class="hint" id="job-progress-label">{{ progress.done }} of {{ progress.total }} assets done ({{ progress.percent }}%)</p>
+  <table>
+    <tr><th>Estimated</th><th>Spent so far</th><th>Cap</th><th>Updated</th></tr>
+    <tr>
+      <td id="job-estimate">{{ estimate_display }}</td>
+      <td id="job-spent">{{ spent_display }}</td>
+      <td id="job-cap">{{ cap_display }}</td>
+      <td id="job-updated">{{ job.updated_at }}</td>
+    </tr>
+  </table>
+  {% if cancellable %}
+  <form method="post" action="/jobs/{{ job.id }}/cancel"
+        hx-post="/jobs/{{ job.id }}/cancel" hx-target="#monitor" hx-swap="outerHTML"
+        id="cancel-form" class="actions-row">
+    <button type="submit">Cancel job</button>
+  </form>
+  {% endif %}
+  <h2>Assets</h2>
+  <table>
+    <tr><th>#</th><th>Kind</th><th>Beat</th><th>Status</th><th>Attempts</th><th>Spent</th><th>Error</th><th></th></tr>
+    {% for asset in job.assets %}
+    <tr data-asset-id="{{ asset.id }}">
+      <td>{{ asset.id }}</td>
+      <td>{{ asset.kind }}</td>
+      <td>{{ asset.beat_index }}</td>
+      <td class="asset-status">{{ asset.status }}</td>
+      <td class="asset-attempts">{{ asset.attempts }}</td>
+      <td class="asset-spent">{{ asset_costs[asset.id] }}</td>
+      <td class="asset-error">{{ asset.error or "" }}</td>
+      <td class="asset-retry">
+        {% if job_retries %}
+        <form method="post" action="/jobs/{{ job.id }}/assets/{{ asset.id }}/retry"
+              hx-post="/jobs/{{ job.id }}/assets/{{ asset.id }}/retry"
+              hx-target="#monitor" hx-swap="outerHTML"
+              {% if asset.status not in ("failed", "skipped") %}hidden{% endif %}>
+          <button type="submit" class="tertiary">Retry</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="hint"><a href="/jobs/{{ job.id }}">Refresh</a> — this page reattaches to the
+     running job and streams live progress; retry buttons appear on failed or skipped assets.</p>
+</div>
