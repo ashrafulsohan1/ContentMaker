@@ -23,8 +23,9 @@ Canonical, dated decision history. PROMPT.md is the spec of record; resolved dec
 - **Hooks approval** — formatter-on-edit hook proposed in BUILD_PLAN.md §7; awaiting user decision at plan sign-off.
 - **git init** — Phase 0 proposes initializing a git repo (keys/outputs gitignored); user can veto at sign-off.
 
-## Current status (2026-11-04)
+## Current status (2026-11-05)
 
-- **Done:** PROMPT.md v1.2 spec; stack, provider, and testing decisions; BUILD_PLAN.md v1.0 drafted (incl. subagent/concurrency + background/automation plans per §11).
-- **In progress:** awaiting user sign-off on BUILD_PLAN.md (spec §11 gate — no code before approval).
-- **Next:** on approval → Phase 0 (env/scaffolding) then Milestone 1 (skeleton + full UI flow on mocked engines). User action item: obtain a Google Gemini API key before Milestone 2 starts (not needed for M1, which runs fully mocked).
+- **Done:** Phase 0 + **all of Milestone 1** (tasks 1.1–1.13) — committed on `milestone/1-skeleton`, ~250 tests green, ruff clean. M1 smoke gate fixed to a 30-min timeout after a 5-min `world.run` timeout killed the first attempt.
+- **In progress:** dynamic workflow run `dwfrun-98de313d-2572-4559-acd6-0be1a550924b` (successor of `dwfrun-27f8f31f-fe7d-48a3-a0e4-0c45e2f414fd`) executing milestone-1 gate → M2 → M3 → M4 → GitHub release, per D10. It pauses automatically when the user's daily tokens exhaust.
+- **Pause/recovery protocol:** stopped(`provider`) → `ResumeWorkflowRun("dwfrun-98de313d-2572-4559-acd6-0be1a550924b")`; errored → edit `.zcode/workflow-drafts/Take-stock-of-the-build.dwf.ts` and `AmendWorkflow(path)` — never re-create from scratch (the journal cache replays ~55M tokens of finished work at zero cost). Detailed task history: `.superpowers/sdd/BUILD_PLAN/progress.md` ledger.
+- **Next:** M2 research spike + Gemini client/TTS (offline contract tests; real-provider smoke needs the user's Gemini key, still not obtained). GitHub release step confirms repo name/visibility with the user (private recommended).
