@@ -16,6 +16,8 @@ Canonical, dated decision history. PROMPT.md is the spec of record; resolved dec
 | D8 | 2026-11-04 | **Planning docs live in project root** — `BUILD_PLAN.md` (approved planning artifact, per spec §11) instead of the writing-plans skill default `docs/superpowers/plans/` location; `PROJECT_LOG.md` for session continuity alongside this file | Spec §11/§12 mandate project-root files; spec location preference overrides skill default |
 | D9 | 2026-11-04 | **Step-level TDD task breakdowns are produced at the start of each milestone**, not all up front. BUILD_PLAN.md locks scope, file structure, interfaces, and verification gates per milestone; the fine-grained red-green-refactor task list for the active milestone is written then (via tdd/writing-plans skills) | Keeps BUILD_PLAN.md reviewable; avoids a mile-long plan that predates reality |
 
+| D10 | 2026-11-04 | **Dynamic workflow drives the build to release.** User explicitly requested a manager/worker workflow that continues without stopping until the product is finished, tested, and released via GitHub, asking (not stalling) when user input is needed. Release = GitHub repo + v1.0.0 release; repo visibility to be confirmed with the user at release time (private recommended). Amends BUILD_PLAN §5's "only on explicit request" — this is that explicit request | User message 2026-11-04; run `dwfrun-27f8f31f-fe7d-48a3-a0e4-0c45e2f414fd` |
+
 ## Pending decisions
 
 - **Hooks approval** — formatter-on-edit hook proposed in BUILD_PLAN.md §7; awaiting user decision at plan sign-off.
