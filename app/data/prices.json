@@ -1,0 +1,32 @@
+{
+  "_meta": {
+    "description": "Per-provider unit prices in USD — editable config. Estimates and spend math read this file; no price is hardcoded (BUILD_PLAN 1.6, §0, risks #1/#5).",
+    "currency": "USD",
+    "units": {
+      "tts": "usd_per_1k_chars — price per 1,000 characters; estimates ceil to whole units",
+      "image": "usd_per_image — price per generated image",
+      "video": "usd_per_second — price per second of clip; estimates ceil fractional seconds up"
+    },
+    "warning": "Providers flagged verified:false carry ballpark placeholders from BUILD_PLAN §0. The M2 research spike (task 2.0) must re-verify model IDs and prices before any real provider is wired or any paid call is made."
+  },
+  "providers": {
+    "mock": {
+      "label": "Zero-cost mock providers (dry-run mode)",
+      "verified": true,
+      "engines": {
+        "tts": { "unit": "usd_per_1k_chars", "price": 0.0 },
+        "image": { "unit": "usd_per_image", "price": 0.0 },
+        "video": { "unit": "usd_per_second", "price": 0.0 }
+      }
+    },
+    "gemini": {
+      "label": "Google Gemini API (AI Studio key) — BUILD_PLAN §0 recommendation",
+      "verified": false,
+      "engines": {
+        "tts": { "model": "gemini-2.5-flash-preview-tts", "unit": "usd_per_1k_chars", "price": 0.03 },
+        "image": { "model": "gemini-2.5-flash-image", "unit": "usd_per_image", "price": 0.10 },
+        "video": { "model": "veo-3.1-fast-generate-preview", "unit": "usd_per_second", "price": 0.30 }
+      }
+    }
+  }
+}

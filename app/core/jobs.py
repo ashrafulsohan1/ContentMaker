@@ -15,9 +15,12 @@ Implements spec §6.6:
   non-retryable errors fail the asset immediately. A failed asset never
   kills the job — the run finalizes as ``partial`` (or ``failed`` if nothing
   completed), and ``retry_asset`` re-runs just that asset.
-- Hard per-job spend cap is checked BEFORE each paid call (estimate vs
-  spent); over-cap assets are skipped before any provider call, completed
-  assets are kept, and the job marks ``partial`` (§10.4).
+- Hard per-job spend cap is checked BEFORE each paid call via
+  ``core.cost.cap_reached`` (estimate vs spent); over-cap assets are skipped
+  before any provider call, completed assets are kept, and the job marks
+  ``partial`` (§10.4). Each completed call also appends one line to the
+  project's ``state/spend_log.jsonl`` audit trail (core.cost.SpendLog,
+  PROMPT §7); zero-cost mock calls are logged as the 0.0 they cost.
 - Cancel flips the persisted status; the worker keeps completed assets,
   skips never-started ones and leaves the status ``cancelled``.
 
@@ -39,6 +42,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.core.cost import SpendLog, cap_reached
 from app.engines.base import (
     ImageRequest,
     ProviderError,
@@ -81,9 +85,6 @@ _ASSET_TRANSITIONS: dict[str, frozenset[str]] = {
     "failed": frozenset({"pending", "skipped"}),  # retry / explicit skip (§6.6)
     "skipped": frozenset({"pending"}),  # regenerate a skipped asset
 }
-
-_CAP_EPSILON = 1e-9
-
 
 class IllegalTransition(ValueError):
     """A job/asset status change that the §6.6 state machine does not allow."""
@@ -440,6 +441,7 @@ class JobEngine:
         *,
         projects_root: Path | None = None,
         store_factory: Callable[[str], JobStore] | None = None,
+        spend_log_factory: Callable[[str], SpendLog] | None = None,
         max_attempts: int = 3,
         backoff_base_s: float = 0.5,
         sleep: Callable[[float], None] = time.sleep,
@@ -451,6 +453,13 @@ class JobEngine:
         self._registry = registry
         self._projects_root = Path(projects_root) if projects_root else None
         self._store_factory = store_factory or self._default_store_factory
+        if spend_log_factory is not None:
+            self._spend_log_factory = spend_log_factory
+        elif self._projects_root is not None:
+            self._spend_log_factory = self._default_spend_log_factory
+        else:  # explicit store without a log location — run without the audit trail
+            self._spend_log_factory = None
+        self._spend_logs: dict[str, SpendLog] = {}
         self._stores: dict[str, JobStore] = {}
         self._job_index: dict[str, str] = {}  # job_id → project (accelerates lookups)
         self._max_attempts = max(1, max_attempts)
@@ -473,6 +482,20 @@ class JobEngine:
     def _default_store_factory(self, project: str) -> JobStore:
         assert self._projects_root is not None
         return JobStore(self._projects_root / project / "state" / "job.db")
+
+    def _default_spend_log_factory(self, project: str) -> SpendLog:
+        assert self._projects_root is not None
+        return SpendLog(self._projects_root / project / "state" / "spend_log.jsonl")
+
+    def spend_log(self, project: str) -> SpendLog | None:
+        """The project's JSONL spend audit trail, or None when unconfigured."""
+        if self._spend_log_factory is None:
+            return None
+        log = self._spend_logs.get(project)
+        if log is None:
+            log = self._spend_log_factory(project)
+            self._spend_logs[project] = log
+        return log
 
     def store(self, project: str) -> JobStore:
         store = self._stores.get(project)
@@ -699,14 +722,16 @@ class JobEngine:
                 break
             if asset.status != "pending":
                 continue  # done/failed stay; failed needs explicit retry_asset
-            if not self._process_asset(store, job_id, asset):
+            if not self._process_asset(store, job_id, asset, project):
                 break
         if store.get_job(job_id).status == "cancelled":
             store.skip_pending(job_id, error="cancelled before start")
             return
         self._finalize(store, job_id)
 
-    def _process_asset(self, store: JobStore, job_id: str, asset: Asset) -> bool:
+    def _process_asset(
+        self, store: JobStore, job_id: str, asset: Asset, project: str
+    ) -> bool:
         """Run one asset with bounded retry + backoff. False ⇒ job cancelled."""
         job = store.get_job(job_id)
         try:
@@ -722,11 +747,7 @@ class JobEngine:
         if estimate is None:
             estimate = float(provider.estimate_cost_usd(request))
             store.update_asset(asset.id, estimated_cost_usd=estimate)
-        over_cap = (
-            job.spend_cap_usd is not None
-            and job.spent_usd + estimate > job.spend_cap_usd + _CAP_EPSILON
-        )
-        if over_cap:
+        if cap_reached(job.spend_cap_usd, job.spent_usd, estimate):
             store.update_asset(
                 asset.id,
                 status="skipped",
@@ -746,6 +767,16 @@ class JobEngine:
                 provider.generate(request)
                 cost = float(provider.estimate_cost_usd(request))
                 store.record_spend(job_id, cost)
+                log = self.spend_log(project)
+                if log is not None:
+                    log.record(
+                        job_id=job_id,
+                        project=project,
+                        engine=asset.kind,
+                        provider_id=provider.provider_id,
+                        amount_usd=cost,
+                        asset_id=asset.id,
+                    )
                 store.update_asset(
                     asset.id, status="done", attempts=attempt, spent_usd=cost, error=None
                 )
