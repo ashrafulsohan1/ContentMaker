@@ -1,0 +1,68 @@
+{
+  "_meta": {
+    "description": "Platform/format catalog — spec PROMPT.md §5. Editable config: add platforms/formats here, not in code.",
+    "kinds": "video | image | carousel; aspect and resolution are [w, h]",
+    "note": "max_duration_s values are current platform guidance; adjust as platforms change."
+  },
+  "platforms": [
+    {
+      "id": "youtube",
+      "name": "YouTube",
+      "formats": [
+        { "id": "youtube_long_form", "label": "Long-form 16:9", "kind": "video", "aspect": [16, 9], "max_duration_s": 43200, "resolution": [1920, 1080], "container": "mp4", "min_images": 1, "max_images": 1 },
+        { "id": "youtube_shorts", "label": "Shorts 9:16", "kind": "video", "aspect": [9, 16], "max_duration_s": 180, "resolution": [1080, 1920], "container": "mp4", "min_images": 1, "max_images": 1 }
+      ]
+    },
+    {
+      "id": "tiktok",
+      "name": "TikTok",
+      "formats": [
+        { "id": "tiktok_video", "label": "Video 9:16", "kind": "video", "aspect": [9, 16], "max_duration_s": 600, "resolution": [1080, 1920], "container": "mp4", "min_images": 1, "max_images": 1 }
+      ]
+    },
+    {
+      "id": "instagram",
+      "name": "Instagram",
+      "formats": [
+        { "id": "instagram_reels", "label": "Reels 9:16", "kind": "video", "aspect": [9, 16], "max_duration_s": 90, "resolution": [1080, 1920], "container": "mp4", "min_images": 1, "max_images": 1 },
+        { "id": "instagram_feed_square", "label": "Feed post 1:1", "kind": "image", "aspect": [1, 1], "max_duration_s": null, "resolution": [1080, 1080], "container": "jpg", "min_images": 1, "max_images": 1 },
+        { "id": "instagram_feed_portrait", "label": "Feed post 4:5", "kind": "image", "aspect": [4, 5], "max_duration_s": null, "resolution": [1080, 1350], "container": "jpg", "min_images": 1, "max_images": 1 },
+        { "id": "instagram_carousel", "label": "Carousel", "kind": "carousel", "aspect": [4, 5], "max_duration_s": null, "resolution": [1080, 1350], "container": "jpg", "min_images": 2, "max_images": 10 },
+        { "id": "instagram_stories", "label": "Stories 9:16", "kind": "video", "aspect": [9, 16], "max_duration_s": 60, "resolution": [1080, 1920], "container": "mp4", "min_images": 1, "max_images": 1 }
+      ]
+    },
+    {
+      "id": "x",
+      "name": "X / Twitter",
+      "formats": [
+        { "id": "x_video", "label": "Video 16:9", "kind": "video", "aspect": [16, 9], "max_duration_s": 140, "resolution": [1920, 1080], "container": "mp4", "min_images": 1, "max_images": 1 },
+        { "id": "x_single_image", "label": "Single image", "kind": "image", "aspect": [16, 9], "max_duration_s": null, "resolution": [1200, 675], "container": "jpg", "min_images": 1, "max_images": 1 },
+        { "id": "x_multi_image", "label": "Multi-image (up to 4)", "kind": "carousel", "aspect": [16, 9], "max_duration_s": null, "resolution": [1200, 675], "container": "jpg", "min_images": 2, "max_images": 4 }
+      ]
+    },
+    {
+      "id": "facebook",
+      "name": "Facebook",
+      "formats": [
+        { "id": "facebook_video", "label": "Video 16:9", "kind": "video", "aspect": [16, 9], "max_duration_s": 7200, "resolution": [1920, 1080], "container": "mp4", "min_images": 1, "max_images": 1 },
+        { "id": "facebook_image", "label": "Image post", "kind": "image", "aspect": [16, 9], "max_duration_s": null, "resolution": [1200, 630], "container": "jpg", "min_images": 1, "max_images": 1 }
+      ]
+    },
+    {
+      "id": "linkedin",
+      "name": "LinkedIn",
+      "formats": [
+        { "id": "linkedin_video", "label": "Video 16:9", "kind": "video", "aspect": [16, 9], "max_duration_s": 600, "resolution": [1920, 1080], "container": "mp4", "min_images": 1, "max_images": 1 },
+        { "id": "linkedin_image", "label": "Image post", "kind": "image", "aspect": [16, 9], "max_duration_s": null, "resolution": [1200, 627], "container": "jpg", "min_images": 1, "max_images": 1 },
+        { "id": "linkedin_carousel", "label": "Carousel", "kind": "carousel", "aspect": [1, 1], "max_duration_s": null, "resolution": [1200, 1200], "container": "jpg", "min_images": 2, "max_images": 10 }
+      ]
+    },
+    {
+      "id": "pinterest",
+      "name": "Pinterest",
+      "formats": [
+        { "id": "pinterest_pin", "label": "Standard pin 2:3", "kind": "image", "aspect": [2, 3], "max_duration_s": null, "resolution": [1000, 1500], "container": "jpg", "min_images": 1, "max_images": 1 }
+      ]
+    }
+  ]
+}
