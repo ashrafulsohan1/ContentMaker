@@ -7,8 +7,9 @@ Assembles the local single-user app:
   estimate + confirm → generate → job monitor);
 - ``app.state`` — shared singletons: provider ``Registry`` (mocks by default
   — the dry-run mode of §7), the job engine (persisted, worker thread), the
-  in-memory wizard ``FlowStore``, the projects root (§7 layout), and the SSE
-  poll interval.
+  in-memory wizard ``FlowStore``, the projects root (§7 layout), the SSE
+  poll interval, and the maintenance task (§6.7 startup + interval sweep of
+  temp/scratch and cancelled-run orphans, BUILD_PLAN 1.13).
 
 Dependencies are injectable for tests: ``create_app(registry=…,
 projects_root=…, sse_poll_s=…)``. Defaults point at the repo's ``projects/``
@@ -28,6 +29,7 @@ from app.api import jobs as api_jobs
 from app.api import sse as api_sse
 from app.assembly.pipeline import assemble_job
 from app.core.jobs import Job, JobEngine
+from app.core.maintenance import DEFAULT_INTERVAL_S, DEFAULT_MIN_AGE_S, MaintenanceTask
 from app.engines.mocks import MockImageProvider, MockTTSProvider, MockVideoProvider
 from app.engines.registry import Registry
 from app.web import routes as web_routes
@@ -57,10 +59,19 @@ def default_registry() -> Registry:
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    yield
-    engine = getattr(app.state, "jobs", None)
-    if engine is not None:
-        engine.stop()
+    maintenance = getattr(app.state, "maintenance", None)
+    if maintenance is not None:
+        maintenance.start()  # startup sweep + interval loop (§6.7), own thread
+    try:
+        yield
+    finally:
+        # Maintenance stops before the job worker: the sweeper must never race
+        # a worker that is still finishing a job during shutdown.
+        if maintenance is not None:
+            maintenance.stop()
+        engine = getattr(app.state, "jobs", None)
+        if engine is not None:
+            engine.stop()
 
 
 def create_app(
@@ -68,6 +79,9 @@ def create_app(
     registry: Registry | None = None,
     projects_root: Path | None = None,
     sse_poll_s: float = 0.5,
+    maintenance_enabled: bool = True,
+    maintenance_interval_s: float = DEFAULT_INTERVAL_S,
+    maintenance_min_age_s: float = DEFAULT_MIN_AGE_S,
 ) -> FastAPI:
     app = FastAPI(title="ContentMaker", version="0.1.0", lifespan=_lifespan)
     app.state.registry = registry if registry is not None else default_registry()
@@ -79,6 +93,15 @@ def create_app(
         app.state.registry,
         projects_root=app.state.projects_root,
         assembler=_assembler_for(app.state.projects_root),
+    )
+    app.state.maintenance = (
+        MaintenanceTask(
+            app.state.projects_root,
+            interval_s=maintenance_interval_s,
+            min_age_s=maintenance_min_age_s,
+        )
+        if maintenance_enabled
+        else None
     )
     app.state.sse_poll_s = float(sse_poll_s)
     app.include_router(api_jobs.router)
