@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# User content & runtime state — never commit (spec §6.5: keys never committed)
+projects/
+state/
+*.local.json
+
+# Plan-execution scratch
+.superpowers/
+
+# OS
+Thumbs.db
+.DS_Store
