@@ -55,4 +55,32 @@
   </table>
   <p class="hint"><a href="/jobs/{{ job.id }}">Refresh</a> — this page reattaches to the
      running job and streams live progress; retry buttons appear on failed or skipped assets.</p>
+  {% if terminal and deliverables %}
+  <h2 id="deliverables">Deliverables ({{ deliverables|length }})</h2>
+  <ul class="deliverables">
+    {% for d in deliverables %}
+    <li class="deliverable deliverable-{{ d.kind }}">
+      <a href="{{ d.url }}" download>{{ d.name }}</a>
+      <span class="hint">{{ (d.size_bytes / 1024) | round(1) }} KB</span>
+      {% if d.kind == "video" %}
+      <video controls preload="metadata" src="{{ d.url }}"></video>
+      {% elif d.kind == "image" %}
+      <a href="{{ d.url }}"><img src="{{ d.url }}" alt="{{ d.name }}"></a>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  <p class="hint">Preview here or download — the files live in
+     <code>projects/{{ job.project }}/output/</code>. Timing per beat is recorded in
+     <code>plan/{{ job.id }}_manifest.json</code>.</p>
+  {% endif %}
+  {% if terminal %}
+  <form method="post" action="/jobs/{{ job.id }}/assemble"
+        hx-post="/jobs/{{ job.id }}/assemble" hx-target="#monitor" hx-swap="outerHTML"
+        class="actions-row">
+    <button type="submit">Re-assemble deliverables</button>
+    <span class="hint">Rebuilds output/ and the timing manifest from the job's assets —
+       no generation, no spend.</span>
+  </form>
+  {% endif %}
 </div>

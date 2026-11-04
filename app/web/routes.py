@@ -25,11 +25,12 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from starlette.datastructures import FormData, UploadFile
 
 from app.api.jobs import engine_of, job_progress
+from app.assembly.pipeline import list_deliverables, media_type_for, write_job_plan
 from app.core.jobs import (
     TERMINAL_JOB_STATUSES,
     AssetNotFound,
@@ -42,6 +43,7 @@ from app.core.projects import ProjectError, create_project
 from app.data.presets import PresetError, load_presets
 from app.data.specs import FormatSpec, load_platforms, lookup_format
 from app.engines.registry import ENGINES, Registry
+from app.scripting.manifest import DEFAULT_FPS
 from app.web.flow import (
     PAGE_SIZE,
     FlowError,
@@ -322,6 +324,19 @@ async def submit_options(request: Request):
         return _render_options(
             request, flow, errors=[job.error or "Cost estimation failed."], sticky=options
         )
+    # Persist what assembly will need when the job finalizes (restart-safe,
+    # §6.6): the chosen format's kind/resolution/container live in plan/.
+    write_job_plan(
+        flow.project.path,
+        job_id=job.id,
+        platform_id=options.platform_id,
+        format_id=format_spec.id,
+        kind=format_spec.kind,
+        width=format_spec.resolution[0],
+        height=format_spec.resolution[1],
+        container=format_spec.container,
+        fps=DEFAULT_FPS,
+    )
     flow.options = options
     flow.job_id = job.id
     return RedirectResponse(f"/confirm/{job.id}", status_code=303)
@@ -524,7 +539,21 @@ def _fetch_job(request: Request, job_id: str) -> Job:
         raise HTTPException(status_code=404, detail=f"no job with id '{job_id}'") from None
 
 
-def _monitor_context(job: Job) -> dict[str, Any]:
+def _deliverable_rows(request: Request, job: Job) -> list[dict[str, Any]]:
+    """The job's deliverables in output/ for the preview/export section (§4.7)."""
+    project_dir = request.app.state.projects_root / job.project
+    return [
+        {
+            "name": item.name,
+            "url": f"/projects/{job.project}/output/{item.name}",
+            "size_bytes": item.size_bytes,
+            "kind": item.kind,
+        }
+        for item in list_deliverables(project_dir, job)
+    ]
+
+
+def _monitor_context(request: Request, job: Job) -> dict[str, Any]:
     return {
         "job": job,
         "terminal": job.status in TERMINAL_JOB_STATUSES,
@@ -535,6 +564,7 @@ def _monitor_context(job: Job) -> dict[str, Any]:
         "spent_display": _usd(job.spent_usd),
         "cap_display": "no cap" if job.spend_cap_usd is None else _usd(job.spend_cap_usd),
         "asset_costs": {asset.id: _usd(asset.spent_usd) for asset in job.assets},
+        "deliverables": _deliverable_rows(request, job),
     }
 
 
@@ -547,7 +577,7 @@ def _monitor_render(
     error: str | None = None,
 ):
     """Full monitor page for plain requests; the #monitor fragment for htmx."""
-    context = _monitor_context(job) | {"notice": notice, "error": error}
+    context = _monitor_context(request, job) | {"notice": notice, "error": error}
     template = "_monitor.html" if request.headers.get("HX-Request") else "job.html"
     return templates.TemplateResponse(request, template, context, status_code=status_code)
 
@@ -603,3 +633,40 @@ def retry_asset(job_id: str, asset_id: int, request: Request):
         job = _fetch_job(request, job_id)
         return _monitor_response(request, job, status_code=409, error=str(exc))
     return _monitor_response(request, job, notice=f"Asset {asset_id} re-queued for generation.")
+
+
+# --- preview / export (BUILD_PLAN 1.12, spec §4.7/§8) --------------------------------
+#
+# Assembly runs at finalize (engine assembler hook) and rebuilds on per-asset
+# retry; POST /jobs/{id}/assemble re-runs it on demand without touching assets.
+# Deliverables are previewed inline (img/video) and served from output/ —
+# traversal is neutralized by resolving inside the project's output dir only.
+
+@router.post("/jobs/{job_id}/assemble")
+def assemble_job_route(job_id: str, request: Request):
+    engine = engine_of(request)
+    try:
+        job = engine.assemble(job_id)
+    except JobNotFound:
+        raise HTTPException(status_code=404, detail=f"no job with id '{job_id}'") from None
+    except ValueError as exc:  # non-terminal job, no assembler, or AssemblyError
+        job = _fetch_job(request, job_id)
+        return _monitor_response(request, job, status_code=409, error=str(exc))
+    count = len(_deliverable_rows(request, job))
+    return _monitor_response(
+        request, job,
+        notice=f"Deliverables re-assembled ({count} file{'s' if count != 1 else ''})"
+               " from the job's assets — preview below.",
+    )
+
+
+@router.get("/projects/{project}/output/{file_path:path}")
+def serve_output_file(project: str, file_path: str, request: Request):
+    """Serve one deliverable for preview/download — strictly inside output/."""
+    out_dir = (request.app.state.projects_root / project / "output").resolve()
+    target = (out_dir / file_path).resolve()
+    if not target.is_relative_to(out_dir) or not target.is_file():
+        raise HTTPException(
+            status_code=404, detail=f"no deliverable {file_path!r} in project '{project}'"
+        )
+    return FileResponse(target, media_type=media_type_for(target.name))

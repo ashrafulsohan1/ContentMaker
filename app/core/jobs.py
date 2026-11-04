@@ -23,6 +23,12 @@ Implements spec §6.6:
   PROMPT §7); zero-cost mock calls are logged as the 0.0 they cost.
 - Cancel flips the persisted status; the worker keeps completed assets,
   skips never-started ones and leaves the status ``cancelled``.
+- Local assembly is an optional ``assembler`` callback (task 1.12 wiring):
+  the worker runs it after the asset pass and before finalize, so the
+  deliverables in ``output/`` already exist when the job turns terminal; an
+  assembly failure marks the job ``failed`` naming the step (assets stay
+  done — retry/re-assemble recovers). ``assemble(job_id)`` re-runs it on a
+  terminal job without touching asset state (§8 regenerate-then-export).
 
 Terminal job statuses are final except via ``JobStore.reopen_for_retry``
 (sanctioned re-open used by per-asset retry; task 4.4 builds the API on it).
@@ -447,10 +453,12 @@ class JobEngine:
         sleep: Callable[[float], None] = time.sleep,
         job_id_factory: Callable[[], str] | None = None,
         worker_poll_s: float = 0.05,
+        assembler: Callable[[Job], None] | None = None,
     ) -> None:
         if store_factory is None and projects_root is None:
             raise ValueError("JobEngine needs projects_root or an explicit store_factory")
         self._registry = registry
+        self._assembler = assembler
         self._projects_root = Path(projects_root) if projects_root else None
         self._store_factory = store_factory or self._default_store_factory
         if spend_log_factory is not None:
@@ -611,6 +619,27 @@ class JobEngine:
         self._enqueue(job.project, job_id)
         return self.job(job_id)
 
+    def assemble(self, job_id: str) -> Job:
+        """Re-run local assembly for a terminal job, assets untouched (§8).
+
+        Generation produced the assets; this rebuilds the deliverables and the
+        timing manifest from them — the regenerate-without-redoing path, also
+        the manual entry point after fixing anything outside the job system.
+        Requires a terminal status (running jobs assemble themselves at
+        finalize) and a configured assembler.
+        """
+        job = self._resolve(job_id)
+        if job.status not in TERMINAL_JOB_STATUSES:
+            raise IllegalTransition(
+                f"job '{job_id}' must be terminal to assemble (now '{job.status}')"
+            )
+        if self._assembler is None:
+            raise ValueError(
+                f"job engine has no assembler configured; cannot assemble '{job_id}'"
+            )
+        self._assembler(job)
+        return self.job(job_id)
+
     def resume(self) -> list[Job]:
         """Re-enqueue jobs persisted as ``running`` (server restarted mid-job).
 
@@ -727,6 +756,17 @@ class JobEngine:
         if store.get_job(job_id).status == "cancelled":
             store.skip_pending(job_id, error="cancelled before start")
             return
+        if self._assembler is not None and any(
+            asset.status == "done" for asset in store.list_assets(job_id)
+        ):
+            # Deliverables must exist by the time the job reads terminal — an
+            # assembly failure marks the job failed with the assets kept (a
+            # retry or assemble() re-runs just this step).
+            try:
+                self._assembler(store.get_job(job_id))
+            except Exception as exc:
+                store.update_job_status(job_id, "failed", error=f"assembly failed: {exc}")
+                return
         self._finalize(store, job_id)
 
     def _process_asset(

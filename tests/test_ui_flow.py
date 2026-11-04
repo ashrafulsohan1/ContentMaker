@@ -60,7 +60,10 @@ def visible_texts(html: str) -> list[str]:
     return re.findall(r"<textarea[^>]*>(.*?)</textarea>", html, re.DOTALL)
 
 
-def wait_terminal(client: TestClient, job_id: str, timeout_s: float = 15.0) -> dict:
+# 60s: task 1.12 wired real-ffmpeg assembly into finalize, so full-flow jobs
+# now encode platform-sized deliverables — the 15s pre-assembly budget is
+# too tight under full-suite load.
+def wait_terminal(client: TestClient, job_id: str, timeout_s: float = 60.0) -> dict:
     import time
 
     deadline = time.monotonic() + timeout_s

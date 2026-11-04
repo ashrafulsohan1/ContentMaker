@@ -107,3 +107,12 @@ th { background: #efece6; }
 tr[data-asset-id] .asset-status { font-weight: 600; }
 a { color: var(--accent); }
 code { background: #efece6; padding: 0.05rem 0.3rem; border-radius: 4px; font-size: 0.85em; }
+
+/* Deliverables: preview/export section on the job monitor (BUILD_PLAN 1.12). */
+.deliverables { list-style: none; padding: 0; margin: 0.5rem 0; display: grid; gap: 0.9rem; }
+.deliverable { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 0.6rem 0.75rem; }
+.deliverable .hint { margin-left: 0.5rem; }
+.deliverable img, .deliverable video {
+  display: block; margin-top: 0.5rem; max-width: 100%;
+  max-height: 20rem; border: 1px solid var(--line); border-radius: 6px; background: #000;
+}

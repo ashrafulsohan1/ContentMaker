@@ -114,7 +114,11 @@ class MockVideoProvider:
         cmd = [
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
             "-f", "lavfi", "-i", source,
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+            # veryfast: mocks encode at platform dims on every dry-run job and
+            # in tests — x264's default (medium) preset dominates that cost
+            # for no visual gain on solid-color clips.
+            "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
             str(request.out_path),
         ]
         try:

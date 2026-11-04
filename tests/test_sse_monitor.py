@@ -31,6 +31,7 @@ import json
 import re
 import threading
 import time
+import wave
 from collections import deque
 from collections.abc import Callable
 from typing import Any
@@ -122,8 +123,15 @@ class ScriptedTTS:
             raise ProviderError(self.provider_id, "gate never released", retryable=False)
         if self.mode == "fail":
             raise ProviderError(self.provider_id, "simulated TTS outage", retryable=False)
+        # A real silent WAV (1.0 s): task 1.12's assembly ffprobes the audio —
+        # "never trust reported durations" — so the double must produce a
+        # provider-shaped file, not a stub.
         request.out_path.parent.mkdir(parents=True, exist_ok=True)
-        request.out_path.write_bytes(b"RIFF scripted")
+        with wave.open(str(request.out_path), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(8000)
+            wav.writeframes(b"\x00\x00" * 8000)
         return TTSResult(file=request.out_path, duration_s=1.0)
 
     def estimate_cost_usd(self, request: TTSRequest) -> float:

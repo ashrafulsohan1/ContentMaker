@@ -26,13 +26,24 @@ from starlette.staticfiles import StaticFiles
 
 from app.api import jobs as api_jobs
 from app.api import sse as api_sse
-from app.core.jobs import JobEngine
+from app.assembly.pipeline import assemble_job
+from app.core.jobs import Job, JobEngine
 from app.engines.mocks import MockImageProvider, MockTTSProvider, MockVideoProvider
 from app.engines.registry import Registry
 from app.web import routes as web_routes
 from app.web.flow import FlowStore
 
 WEB_DIR = Path(web_routes.__file__).resolve().parent
+
+
+def _assembler_for(projects_root: Path):
+    """Local assembly hook (task 1.12): the worker builds deliverables right
+    before a job finalizes, so ``output/`` is populated when it turns terminal."""
+
+    def _assemble(job: Job) -> None:
+        assemble_job(projects_root / job.project, job)
+
+    return _assemble
 
 
 def default_registry() -> Registry:
@@ -64,7 +75,11 @@ def create_app(
         Path(projects_root) if projects_root is not None else _default_projects_root()
     )
     app.state.flow_store = FlowStore()
-    app.state.jobs = JobEngine(app.state.registry, projects_root=app.state.projects_root)
+    app.state.jobs = JobEngine(
+        app.state.registry,
+        projects_root=app.state.projects_root,
+        assembler=_assembler_for(app.state.projects_root),
+    )
     app.state.sse_poll_s = float(sse_poll_s)
     app.include_router(api_jobs.router)
     app.include_router(api_sse.router)
