@@ -57,7 +57,7 @@ def parse_script(text: str) -> list[ParsedBeat]:
             line = raw_line.strip()
             scene = _SCENE_LINE.match(line)
             if scene:
-                pre = "\n".join(l for l in pre_marker_lines if l).strip()
+                pre = "\n".join(ln for ln in pre_marker_lines if ln).strip()
                 if pre:
                     flush(pending_label, pending_hint or block_hint, pre)
                     pending_label = None
@@ -71,7 +71,7 @@ def parse_script(text: str) -> list[ParsedBeat]:
                 block_hint = _clean_hint(comment.group(1))
             pre_marker_lines.append(_ANY_COMMENT.sub("", line))
 
-        body = "\n".join(l for l in pre_marker_lines if l).strip()
+        body = "\n".join(ln for ln in pre_marker_lines if ln).strip()
         if body:
             flush(label_in_block or pending_label, block_hint or pending_hint, body)
             pending_label = None

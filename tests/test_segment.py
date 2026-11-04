@@ -7,7 +7,10 @@ from app.scripting.segment import DEFAULT_MAX_BEAT_CHARS, segment_script
 
 
 def _sentences(prefix: str, count: int, length: int) -> str:
-    parts = [f"{prefix}{i} " + "x" * (length - len(prefix) - len(str(i)) - 1) + "." for i in range(count)]
+    parts = [
+        f"{prefix}{i} " + "x" * (length - len(prefix) - len(str(i)) - 1) + "."
+        for i in range(count)
+    ]
     return " ".join(parts)
 
 

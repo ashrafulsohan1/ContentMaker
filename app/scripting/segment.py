@@ -41,5 +41,7 @@ def segment_script(text: str, max_chars: int = DEFAULT_MAX_BEAT_CHARS) -> list[P
             beats.append(beat)
             continue
         for i, chunk in enumerate(_split_by_sentence(beat.text, max_chars)):
-            beats.append(ParsedBeat(label=None, text=chunk, img_hint=beat.img_hint if i == 0 else None))
+            beats.append(
+                ParsedBeat(label=None, text=chunk, img_hint=beat.img_hint if i == 0 else None)
+            )
     return beats

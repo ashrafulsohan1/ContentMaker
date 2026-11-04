@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from app.data.specs import FormatSpec, load_platforms, platforms_path, lookup_format
+from app.data.specs import FormatSpec, load_platforms, lookup_format, platforms_path
 
 
 def test_load_platforms_covers_spec_section_5():

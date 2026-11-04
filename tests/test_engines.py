@@ -54,7 +54,9 @@ def test_mock_tts_minimum_duration_is_one_second(tmp_path: Path):
 def test_mock_image_writes_valid_png_at_requested_size(tmp_path: Path):
     out = tmp_path / "beat_01.png"
     MockImageProvider().generate(
-        ImageRequest(prompt="a castle", style_hint=None, seed=7, width=320, height=200, out_path=out)
+        ImageRequest(
+            prompt="a castle", style_hint=None, seed=7, width=320, height=200, out_path=out
+        )
     )
     data = out.read_bytes()
     assert data[:8] == b"\x89PNG\r\n\x1a\n"
@@ -82,7 +84,9 @@ def test_mock_video_writes_real_mp4(tmp_path: Path):
 
 def test_mock_costs_are_exactly_zero(tmp_path: Path):
     tts = TTSRequest(text="x", voice="v", pace=1.0, tone=None, out_path=tmp_path / "a.wav")
-    img = ImageRequest(prompt="p", style_hint=None, seed=None, width=64, height=64, out_path=tmp_path / "b.png")
+    img = ImageRequest(
+        prompt="p", style_hint=None, seed=None, width=64, height=64, out_path=tmp_path / "b.png"
+    )
     vid = VideoRequest(prompt="p", duration_s=5.0, width=64, height=64, out_path=tmp_path / "c.mp4")
     assert MockTTSProvider().estimate_cost_usd(tts) == 0.0
     assert MockImageProvider().estimate_cost_usd(img) == 0.0

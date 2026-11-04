@@ -79,7 +79,9 @@ def load_platforms(path: Path | None = None) -> list[PlatformSpec]:
     return platforms
 
 
-def lookup_format(platform_id: str, format_id: str, platforms: list[PlatformSpec] | None = None) -> FormatSpec:
+def lookup_format(
+    platform_id: str, format_id: str, platforms: list[PlatformSpec] | None = None
+) -> FormatSpec:
     for platform in platforms if platforms is not None else load_platforms():
         if platform.id == platform_id:
             for fmt in platform.formats:
