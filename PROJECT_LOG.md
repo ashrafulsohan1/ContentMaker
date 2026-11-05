@@ -54,4 +54,15 @@ In progress — awaiting BUILD_PLAN.md sign-off. (Superseded 2026-11-05: approve
 - [ ] At GitHub release: confirm repo name + visibility with user (private recommended)
 
 ### Status
-In progress — run `dwfrun-98de313d` live; will pause automatically when the user's daily tokens exhaust.
+In progress — run `dwfrun-98de313d` live; will pause automatically when the user's daily tokens exhaust. (Superseded 2026-11-05: workflow parked per D12 — see below.)
+
+### Update — 2026-11-05 (mode change)
+- User mandated D11 (granularity/loop/context rules) and D12 (**no spawned subagents** — one agent per project). Token analysis recorded in DECISIONS.md: 55.5M tokens, 75% burned by three long subagent sessions (per-tool-call full-context re-sends).
+- Workflow `dwfrun-98de313d` PARKED at M1 review step (quota stop). Build continues inline by the session agent.
+- **M1 verified end-to-end inline:** 300 tests passed (138s), ruff clean, smoke gate 14/14 PASS (zero-network socket guard; H.264 1080×1920+AAC deliverable matches manifest; 1080×1080 JPEGs; state audit).
+- gh CLI authenticated (0xSpecters) — release unblocked pending repo name/visibility.
+
+### Next steps (inline mode)
+- [ ] Targeted M1 self-review (risk files: jobs.py, cost.py) — subagent review unavailable per D12
+- [ ] M2 inline: research spike → settings/keys → Gemini client/TTS (offline contract tests)
+- [ ] Browser sweep deferred (token economy) — revisit at release polish

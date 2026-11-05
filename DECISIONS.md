@@ -18,6 +18,15 @@ Canonical, dated decision history. PROMPT.md is the spec of record; resolved dec
 
 | D10 | 2026-11-04 | **Dynamic workflow drives the build to release.** User explicitly requested a manager/worker workflow that continues without stopping until the product is finished, tested, and released via GitHub, asking (not stalling) when user input is needed. Release = GitHub repo + v1.0.0 release; repo visibility to be confirmed with the user at release time (private recommended). Amends BUILD_PLAN §5's "only on explicit request" — this is that explicit request | User message 2026-11-04; run `dwfrun-27f8f31f-fe7d-48a3-a0e4-0c45e2f414fd` |
 
+| D11 | 2026-11-05 | **Operating rules (user-mandated):** (1) task granularity — as many tasks as needed, none so small they don't make sense alone; (2) loop discipline — ≤10 loops per task unless mandatory, validate each loop's necessity before running it; (3) context economy — after a first pass, prefer compact/handoff over re-sending the whole session, reasoning compact-vs-full each time; durable on-disk state (DECISIONS/PROJECT_LOG/ledger) makes compaction safe | User message 2026-11-05 |
+| D12 | 2026-11-05 | **Single-agent rule: no spawned subagents** for this project (user works other projects concurrently). Workflow runs are parked, not deleted: `dwfrun-98de313d-2572-4559-acd6-0be1a550924b` stopped at the M1 review step on quota; resume **only** if the user reverses this rule. Build continues inline (executing-plans style) by the one session agent; reviews become disclosed self-reviews until subagents are allowed again | User message 2026-11-05 |
+
+## Token-consumption analysis (2026-11-05, recorded per user request)
+
+- **Measured:** 55,491,991 tokens over 18h37m of workflow runtime (≈830 tok/s average, higher bursts). Per-session breakdown: worker-1.12 ≈25.2M, worker-1.11 ≈9.7M, worker-1.10 ≈6.8M — three sessions ≈75% of the total.
+- **Root cause:** every subagent tool call re-sends that subagent's entire conversation; a large task (1.12 = assembly + export + UI + 50 tests) means hundreds of calls against a growing context — compounding cost. Secondary: workers ran the full suite 3–5× per task for flake "stability theater".
+- **Fixes applied:** subagent swarms retired (D12 — the dominant cause); inline agent relies on automatic context compaction backed by durable on-disk state; targeted reviews of risk files instead of whole-diff reads; max 2 full-suite runs per task; batched tool calls; oversized tasks split only where a session would otherwise balloon (per D11.1).
+
 ## Pending decisions
 
 - **Hooks approval** — formatter-on-edit hook proposed in BUILD_PLAN.md §7; awaiting user decision at plan sign-off.
