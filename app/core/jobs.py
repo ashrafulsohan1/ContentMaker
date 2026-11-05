@@ -14,7 +14,10 @@ Implements spec §6.6:
 - Bounded retry with exponential backoff for retryable ProviderError values;
   non-retryable errors fail the asset immediately. A failed asset never
   kills the job — the run finalizes as ``partial`` (or ``failed`` if nothing
-  completed), and ``retry_asset`` re-runs just that asset.
+  completed), and ``retry_asset`` re-runs just that asset. A retry requested
+  while the job is still running is never swallowed: the active pass is
+  asked (``_rerun``) to go again, reopening the finalized job to pick the
+  asset up (§6.6 per-asset regeneration must not dead-end).
 - Hard per-job spend cap is checked BEFORE each paid call via
   ``core.cost.cap_reached`` (estimate vs spent); over-cap assets are skipped
   before any provider call, completed assets are kept, and the job marks
@@ -36,6 +39,7 @@ Terminal job statuses are final except via ``JobStore.reopen_for_retry``
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -71,6 +75,8 @@ ASSET_STATUSES: tuple[str, ...] = ("pending", "generating", "done", "failed", "s
 TERMINAL_JOB_STATUSES: frozenset[str] = frozenset({"completed", "partial", "failed", "cancelled"})
 
 DEFAULT_PROVIDER_ID = "mock"
+
+logger = logging.getLogger(__name__)
 
 _JOB_TRANSITIONS: dict[str, frozenset[str]] = {
     "draft": frozenset({"estimating", "cancelled"}),
@@ -478,6 +484,7 @@ class JobEngine:
         self._worker_poll_s = worker_poll_s
         self._queue: deque[tuple[str, str]] = deque()  # (project, job_id)
         self._active: set[str] = set()
+        self._rerun: set[str] = set()  # active jobs with a re-pass requested (§6.6 retry)
         self._cond = threading.Condition()
         self._stop_event = threading.Event()
         self._thread = threading.Thread(
@@ -716,7 +723,13 @@ class JobEngine:
     def _enqueue(self, project: str, job_id: str) -> None:
         with self._cond:
             if job_id in self._active:
-                return  # already queued or in flight; the running pass covers it
+                # The pass in flight must not swallow this request (a mid-run
+                # per-asset retry, §6.6): ask the active pass to go again once
+                # it finishes. Check-and-discard in _worker is atomic under
+                # _cond, so the request is either honored here or, if the pass
+                # just went idle, queued below.
+                self._rerun.add(job_id)
+                return
             self._active.add(job_id)
             self._queue.append((project, job_id))
             self._cond.notify_all()
@@ -730,13 +743,33 @@ class JobEngine:
                     return
                 project, job_id = self._queue.popleft()
             try:
-                self._run_job(project, job_id)
-            except Exception:  # noqa: S110 — a crashed run must not kill the worker
-                pass
-            finally:
+                while True:
+                    self._run_job(project, job_id)
+                    with self._cond:  # atomic with the discard below: no lost rerun
+                        if job_id not in self._rerun:
+                            self._active.discard(job_id)
+                            self._cond.notify_all()
+                            break
+                        self._rerun.discard(job_id)
+            except Exception as exc:  # a crashed run must not kill the worker
+                logger.error(
+                    "job run crashed: project=%s job=%s", project, job_id, exc_info=exc
+                )
+                self._recover_crashed_run(project, job_id, exc)
                 with self._cond:
                     self._active.discard(job_id)
                     self._cond.notify_all()
+
+    def _recover_crashed_run(self, project: str, job_id: str, exc: Exception) -> None:
+        """Persist the crash on the job — it must not sit ``running`` forever
+        with no error (risk #7: sqlite/OneDrive locks). Best effort: if the
+        status write itself fails, the log line above is the record of it."""
+        try:
+            self.store(project).update_job_status(
+                job_id, "failed", error=f"job run crashed: {exc}"
+            )
+        except Exception:
+            logger.exception("could not record the crashed run of job '%s'", job_id)
 
     def _run_job(self, project: str, job_id: str) -> None:
         store = self.store(project)
@@ -744,8 +777,14 @@ class JobEngine:
         if job.status == "cancelled":  # cancelled while still queued
             store.skip_pending(job_id, error="cancelled before start")
             return
-        if job.status != "running":  # resume() re-entry lands here as 'running'
-            store.update_job_status(job_id, "running")
+        if job.status != "running":
+            if job.status in TERMINAL_JOB_STATUSES:
+                # Rerun pass after a retry landed on an already-finalized run
+                # (mid-run per-asset retry): the sanctioned terminal → running
+                # reopen (§6.6) — there is a pending asset to pick up.
+                store.reopen_for_retry(job_id)
+            else:  # resume() re-entry lands here as 'running'
+                store.update_job_status(job_id, "running")
         for asset in store.list_assets(job_id):
             if store.get_job(job_id).status == "cancelled":
                 break

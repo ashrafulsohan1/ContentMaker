@@ -18,8 +18,8 @@ from pathlib import Path
 DATA_DIR = Path(__file__).resolve().parent
 PRESETS_FILE = DATA_DIR / "presets.json"
 
-_MIN_PACE = 0.1
-_MAX_PACE = 3.0
+MIN_PACE = 0.1
+MAX_PACE = 3.0
 
 
 class PresetError(ValueError):
@@ -109,9 +109,9 @@ def _voice(file: Path, preset_id: str, raw: dict) -> VoiceSettings:
     if isinstance(pace, bool) or not isinstance(pace, (int, float)):
         raise PresetError(f"{where}: 'voice.pace' must be a number, got {pace!r}")
     pace = float(pace)
-    if not math.isfinite(pace) or not _MIN_PACE <= pace <= _MAX_PACE:
+    if not math.isfinite(pace) or not MIN_PACE <= pace <= MAX_PACE:
         raise PresetError(
-            f"{where}: 'voice.pace' must be between {_MIN_PACE} and {_MAX_PACE}, got {pace!r}"
+            f"{where}: 'voice.pace' must be between {MIN_PACE} and {MAX_PACE}, got {pace!r}"
         )
     tone = raw.get("tone")
     if tone is not None and not isinstance(tone, str):

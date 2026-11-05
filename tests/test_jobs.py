@@ -113,6 +113,36 @@ class CancelProbe:
         return 0.0
 
 
+class RunGateTTS:
+    """Call 1 fails non-retryably; call 2 blocks until ``release`` is set.
+
+    Gives a deterministic mid-run window: while the worker sits inside asset
+    2's provider call, the test can retry asset 1 on the *running* job — the
+    exact moment the monitor's retry button is offered (§6.6 per-asset regen).
+    """
+
+    provider_id = "run_gate"
+
+    def __init__(self) -> None:
+        self.in_flight = threading.Event()  # set when call 2 is inside generate()
+        self.release = threading.Event()
+        self.calls = 0
+
+    def generate(self, request: TTSRequest) -> TTSResult:
+        self.calls += 1
+        if self.calls == 1:
+            raise ProviderError(self.provider_id, "call 1 fails", retryable=False)
+        self.in_flight.set()
+        if not self.release.wait(timeout=30.0):
+            raise ProviderError(self.provider_id, "gate never released", retryable=False)
+        request.out_path.parent.mkdir(parents=True, exist_ok=True)
+        request.out_path.write_bytes(b"fake-wav")
+        return TTSResult(file=request.out_path, duration_s=1.0)
+
+    def estimate_cost_usd(self, request: TTSRequest) -> float:
+        return 0.0
+
+
 # --- fixtures / helpers ------------------------------------------------------
 
 
@@ -415,6 +445,81 @@ def test_retry_asset_redoes_only_failed_asset(engine, projects_root: Path, regis
     assert final.assets[0].status == "done" and final.assets[0].attempts == 1  # not redone
     assert final.assets[1].status == "done" and final.assets[1].attempts == 1
     assert retried.status == "running"
+
+
+def test_retry_asset_while_job_is_running_is_honored(projects_root: Path):
+    """The monitor offers per-asset retry while a job is running (§6.6) — the
+    request must actually redo the asset.
+
+    Regression: ``_enqueue`` swallowed the retry while the job was ``_active``
+    and the worker's asset snapshot never revisited it, leaving the asset
+    ``pending`` forever — unretryable (only failed|skipped) and unassemblable,
+    while the UI reported "Asset N re-queued for generation".
+    """
+    reg = Registry()
+    gate = RunGateTTS()
+    reg.register("tts", gate)
+    eng = JobEngine(
+        reg,
+        projects_root=projects_root,
+        max_attempts=3,
+        backoff_base_s=0.01,
+        sleep=lambda _s: None,
+    )
+    try:
+        root = projects_root / "alpha"
+        job = eng.create_job(
+            "alpha", [tts_spec(root, 1), tts_spec(root, 2)], providers={"tts": "run_gate"}
+        )
+        eng.estimate(job.id)
+        eng.start(job.id)
+        assert gate.in_flight.wait(timeout=15.0)  # worker inside asset 2's provider call
+        failed = next(a for a in eng.job(job.id).assets if a.status == "failed")
+        retried = eng.retry_asset(job.id, failed.id)  # mid-run retry on the running job
+        assert retried.status == "running"
+
+        gate.release.set()
+        eng.wait_idle(timeout=30.0)
+        final = eng.job(job.id)
+        assert final.status == "completed", [
+            (a.id, a.status, a.error) for a in final.assets
+        ]
+        assert all(a.status == "done" for a in final.assets)
+    finally:
+        gate.release.set()
+        eng.stop()
+
+
+def test_worker_crash_marks_job_failed_and_worker_survives(
+    engine, projects_root: Path, monkeypatch
+):
+    """A crashed ``_run_job`` (e.g. the OneDrive/sqlite lock risk #7) must not
+    strand the job as ``running`` forever — it is marked ``failed`` with the
+    error recorded, and the worker goes on to process the next job."""
+    original_list_assets = JobStore.list_assets
+    state = {"armed": False}
+
+    def exploding_list_assets(self, job_id):
+        if state["armed"]:
+            state["armed"] = False
+            raise RuntimeError("simulated store crash")
+        return original_list_assets(self, job_id)
+
+    monkeypatch.setattr(JobStore, "list_assets", exploding_list_assets)
+
+    root = projects_root / "alpha"
+    job = engine.create_job("alpha", [tts_spec(root, 1)])
+    engine.estimate(job.id)
+    state["armed"] = True
+    engine.start(job.id)
+    failed = engine.wait(job.id, {"failed"}, timeout=10.0)
+    assert failed.error is not None and "simulated store crash" in failed.error
+
+    # the worker survived the crash and still runs the next job
+    job2 = engine.create_job("alpha", [tts_spec(root, 2)])
+    engine.estimate(job2.id)
+    engine.start(job2.id)
+    assert run_to_end(engine, job2.id).status == "completed"
 
 
 def test_single_worker_thread_processes_queued_jobs(

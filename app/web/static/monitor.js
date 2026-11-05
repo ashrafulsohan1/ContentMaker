@@ -65,6 +65,8 @@
       var cancel = document.getElementById("cancel-form");
       if (cancel) cancel.hidden = true;
     }
+    var confirmForm = document.getElementById("confirm-form");
+    if (confirmForm) confirmForm.hidden = data.status !== "awaiting_confirmation";
   }
 
   var source = new EventSource("/api/jobs/" + encodeURIComponent(jobId) + "/events");

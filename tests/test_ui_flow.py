@@ -533,6 +533,39 @@ class TestOptions:
         payload = client.get(f"/api/jobs/{job_id}").json()
         assert payload["spend_cap_usd"] == pytest.approx(5.0)
 
+    def test_pace_outside_sanity_band_is_rejected_server_side(self, tmp_path):
+        # the UI input bounds pace to 0.1–3 (options.html) and presets.py
+        # enforces the same band — a direct form post must not sneak past it
+        client = make_client(tmp_path)
+        start_flow(client)
+        for pace in ("50", "0.05"):
+            resp = client.post(
+                "/options",
+                data={
+                    "platform_id": "youtube",
+                    "format_id": "youtube_shorts",
+                    "audio": "on",
+                    "visual": "video",
+                    "dry_run": "on",
+                    "pace": pace,
+                },
+            )
+            assert resp.status_code == 200, f"pace={pace} was accepted"
+            assert "pace" in resp.text.lower()
+        ok = client.post(
+            "/options",
+            data={
+                "platform_id": "youtube",
+                "format_id": "youtube_shorts",
+                "audio": "on",
+                "visual": "video",
+                "dry_run": "on",
+                "pace": "2",
+            },
+            follow_redirects=False,
+        )
+        assert ok.status_code == 303  # in-band pace is accepted
+
 
 # --- step 4: confirm + generate ------------------------------------------------
 
@@ -635,3 +668,61 @@ class TestConfirmAndGenerate:
             assert out.is_absolute()
             assert project in out.parents
             assert asset["kind"] == "tts" or "visuals" in out.parts[-2:]
+
+
+# --- confirm after a restart / monitor confirm affordance (review findings) ----
+
+
+class TestConfirmWithoutWizardFlow:
+    """The wizard flow is in-memory; the job is persisted. A server restart
+    between estimate and confirm (or LRU eviction) must leave the estimated
+    job startable: the confirm page renders from the persisted job and the
+    monitor offers a confirm affordance (spec §6.6 gate must not dead-end)."""
+
+    OPTIONS = {
+        "platform_id": "youtube",
+        "format_id": "youtube_shorts",
+        "audio": "on",
+        "visual": "video",
+        "dry_run": "on",
+    }
+
+    def test_confirm_page_renders_from_persisted_job_after_restart(self, tmp_path):
+        client = make_client(tmp_path)
+        start_flow(client)
+        resp = client.post("/options", data=self.OPTIONS, follow_redirects=False)
+        assert resp.status_code == 303
+        job_id = resp.headers["location"].rsplit("/", 1)[1]
+
+        # a fresh app over the same projects_root: job persisted, flow gone
+        fresh = make_client(tmp_path)
+        page = fresh.get(f"/confirm/{job_id}")
+        assert page.status_code == 200, page.text  # was jinja2 UndefinedError
+        assert f'action="/jobs/{job_id}/confirm"' in page.text  # still confirmable
+        assert "$0.0000" in page.text  # persisted estimate shown
+        assert "demo" in page.text  # project named from the persisted job
+
+        started = fresh.post(f"/jobs/{job_id}/confirm", follow_redirects=False)
+        assert started.status_code == 303
+        assert wait_terminal(fresh, job_id)["status"] == "completed"
+
+    def test_monitor_page_offers_confirm_for_awaiting_confirmation(self, estimated_job):
+        client, job_id = estimated_job
+        page = client.get(f"/jobs/{job_id}")
+        assert page.status_code == 200
+        assert f'action="/jobs/{job_id}/confirm"' in page.text
+        assert "Confirm" in page.text
+
+        started = client.post(f"/jobs/{job_id}/confirm", follow_redirects=False)
+        assert started.status_code == 303
+        wait_terminal(client, job_id)
+        page = client.get(f"/jobs/{job_id}")
+        assert f'action="/jobs/{job_id}/confirm"' not in page.text  # terminal: gone
+
+    def test_monitor_confirm_is_hidden_on_running_jobs(self, estimated_job):
+        client, job_id = estimated_job
+        client.post(f"/jobs/{job_id}/confirm", follow_redirects=False)
+        payload = wait_terminal(client, job_id)
+        assert payload["status"] in {"completed", "partial", "failed", "cancelled"}
+        page = client.get(f"/jobs/{job_id}")
+        assert f'action="/jobs/{job_id}/confirm"' not in page.text

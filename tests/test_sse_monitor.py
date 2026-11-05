@@ -602,6 +602,49 @@ class TestCancelAndRetryRoutes:
         assert all(asset["status"] == "done" for asset in payload["assets"])
         assert image.calls == 3
 
+    def test_retry_failed_asset_while_job_is_running(self, tmp_path):
+        """The retry button is offered on a running job — the retry must take
+        effect (§6.6), not be swallowed by the busy worker while the UI says
+        "re-queued". Regression: the asset stayed pending forever, dead-ending
+        the per-asset regeneration path."""
+        tts = ScriptedTTS()
+        tts.mode = "fail"
+        client = make_client(tmp_path, tts=tts)
+        job_id = new_job(client)
+        tts.hold(2)  # call 1 = beat-1 TTS (will fail), call 2 = beat-2 (the gate)
+        client.post(f"/jobs/{job_id}/confirm")
+
+        def held_tts() -> bool:
+            return any(
+                a["kind"] == "tts" and a["status"] == "generating"
+                for a in job_payload(client, job_id)["assets"]
+            )
+
+        wait_for(held_tts)
+        tts.unblock()  # call 1 proceeds → mode fail → beat-1 TTS fails
+        wait_for(
+            lambda: job_payload(client, job_id)["assets"][0]["status"] == "failed",
+            message="beat-1 tts never failed",
+        )
+        wait_for(held_tts, message="beat-2 tts never reached its held call")
+        failed_id = job_payload(client, job_id)["assets"][0]["id"]
+
+        resp = client.post(
+            f"/jobs/{job_id}/assets/{failed_id}/retry", follow_redirects=False
+        )
+        assert resp.status_code == 303  # accepted while running…
+
+        tts.mode = "ok"
+        tts.unblock()  # release the held call; the retried asset must follow
+        wait_for(
+            lambda: (
+                job_payload(client, job_id)["status"] == "completed"
+                and all(a["status"] == "done" for a in job_payload(client, job_id)["assets"])
+            ),
+            timeout_s=20.0,
+            message="retried asset was never redone (swallowed while job was active)",
+        )
+
     def test_retry_done_asset_is_409(self, tmp_path):
         client = make_client(tmp_path)
         job_id = new_job(client)

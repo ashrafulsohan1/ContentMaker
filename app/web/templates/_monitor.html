@@ -21,6 +21,13 @@
       <td id="job-updated">{{ job.updated_at }}</td>
     </tr>
   </table>
+  {% if job.status == "awaiting_confirmation" %}
+  <form method="post" action="/jobs/{{ job.id }}/confirm" id="confirm-form" class="actions-row">
+    <button type="submit">Confirm &amp; generate</button>
+    <span class="hint">This job is waiting for your confirmation — nothing has been
+       spent yet; confirming starts generation.</span>
+  </form>
+  {% endif %}
   {% if cancellable %}
   <form method="post" action="/jobs/{{ job.id }}/cancel"
         hx-post="/jobs/{{ job.id }}/cancel" hx-target="#monitor" hx-swap="outerHTML"

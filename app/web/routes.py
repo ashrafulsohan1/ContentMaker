@@ -40,7 +40,7 @@ from app.core.jobs import (
     JobNotFound,
 )
 from app.core.projects import ProjectError, create_project
-from app.data.presets import PresetError, load_presets
+from app.data.presets import MAX_PACE, MIN_PACE, PresetError, load_presets
 from app.data.specs import FormatSpec, load_platforms, lookup_format
 from app.engines.registry import ENGINES, Registry
 from app.scripting.manifest import DEFAULT_FPS
@@ -406,10 +406,14 @@ def _parse_options(form: FormData) -> tuple[FlowOptions, list[str]]:
     if pace_raw:
         try:
             pace = float(pace_raw)
-            if not math.isfinite(pace) or pace <= 0:
+            # The same sanity band the UI input and presets.py enforce — a
+            # direct form post must not smuggle an absurd pace into TTS params.
+            if not math.isfinite(pace) or not MIN_PACE <= pace <= MAX_PACE:
                 raise ValueError
         except ValueError:
-            errors.append("Pace must be a positive number (1.0 is normal speed).")
+            errors.append(
+                f"Pace must be between {MIN_PACE} and {MAX_PACE} (1.0 is normal speed)."
+            )
             pace = 1.0
             pace_raw = ""
 
@@ -481,6 +485,29 @@ def confirm_page(job_id: str, request: Request):
             format_label = fmt.label
         except ValueError:
             pass
+    # The wizard flow is in-memory only — after a restart (or LRU eviction) the
+    # persisted job must still be confirmable (§6.6 gate must not dead-end), so
+    # every setting below falls back to what the job row itself records.
+    if options is not None:
+        audio_display = (
+            "on — voice " + options.voice
+            if options.audio and options.voice
+            else ("on" if options.audio else "off")
+        )
+        visual_display = options.visual
+        style_display = options.style
+    else:
+        kinds = {asset.kind for asset in job.assets}
+        audio_display = "on" if "tts" in kinds else "off"
+        visual_display = (
+            "video" if "video" in kinds else ("images" if "image" in kinds else "none")
+        )
+        style_display = None
+    dry_run = (
+        options.dry_run
+        if options is not None
+        else bool(job.providers) and all(p == "mock" for p in job.providers.values())
+    )
     rows = [
         {"kind": asset.kind, "beat": asset.beat_index, "cost": _usd(asset.estimated_cost_usd)}
         for asset in job.assets
@@ -499,10 +526,13 @@ def confirm_page(job_id: str, request: Request):
             "beats_count": len(flow.beats) if flow else len(job.assets),
             "platform_label": platform_label,
             "format_label": format_label,
+            "audio_display": audio_display,
+            "visual_display": visual_display,
+            "style_display": style_display,
             "rows": rows,
             "total": _usd(job.estimate_usd),
             "cap_display": "no cap" if job.spend_cap_usd is None else _usd(job.spend_cap_usd),
-            "dry_run": bool(options and options.dry_run),
+            "dry_run": dry_run,
             "provider_pairs": provider_pairs,
         },
     )
