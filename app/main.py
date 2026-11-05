@@ -15,8 +15,8 @@ Assembles the local single-user app:
 Dependencies are injectable for tests: ``create_app(registry=…, key_store=…,
 key_probe=…, projects_root=…)``. Defaults point at the repo's ``projects/``
 folder, a registry of the zero-network mock providers (§1.2) plus the
-key-gated Gemini TTS adapter (BUILD_PLAN 2.3), and a
-key store at ``<repo>/state/keys.json``.
+key-gated Gemini TTS (BUILD_PLAN 2.3) and image (3.1)
+adapters, and a key store at ``<repo>/state/keys.json``.
 """
 
 from __future__ import annotations
@@ -39,6 +39,7 @@ from app.engines.mocks import MockImageProvider, MockTTSProvider, MockVideoProvi
 from app.engines.registry import ENGINES, Registry
 from app.providers import catalog
 from app.providers.gemini.client import GeminiClient
+from app.providers.gemini.image import GeminiImageProvider
 from app.providers.gemini.tts import GeminiTTSProvider
 from app.web import routes as web_routes
 from app.web import settings as web_settings
@@ -59,9 +60,10 @@ def _assembler_for(projects_root: Path):
 
 def default_registry(key_store: KeyStore | None = None) -> Registry:
     """Mocks for every engine (zero-cost, zero-network dry-run of §1.2) plus —
-    when a key store is available — the Gemini TTS adapter (BUILD_PLAN 2.3).
+    when a key store is available — the Gemini TTS (BUILD_PLAN 2.3) and image
+    (BUILD_PLAN 3.1) adapters.
 
-    The adapter reads the key from the store at call time, so registering it
+    The adapters read the key from the store at call time, so registering them
     before any key exists is safe: the flow's key gate (§6.5) rejects a
     key-less BYOK selection before the provider is ever called, and a call
     that slips through fails with the add-your-key-in-Settings error.
@@ -71,7 +73,9 @@ def default_registry(key_store: KeyStore | None = None) -> Registry:
     registry.register("image", MockImageProvider())
     registry.register("video", MockVideoProvider())
     if key_store is not None:
-        registry.register("tts", GeminiTTSProvider(GeminiClient(key_store)))
+        client = GeminiClient(key_store)
+        registry.register("tts", GeminiTTSProvider(client))
+        registry.register("image", GeminiImageProvider(client))
     return registry
 
 
