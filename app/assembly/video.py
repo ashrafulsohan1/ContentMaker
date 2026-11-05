@@ -18,9 +18,12 @@ How a beat is rendered (each beat → one normalized intermediate segment):
   stream layout and the final ``concat`` filter always applies.
 
 The segments are concatenated in one pass and encoded **H.264 + AAC MP4** with
-``+faststart``. After encoding, the probed duration is checked against the
-manifest total: frame quantization allows up to ~1 frame of drift per beat,
-anything beyond that means assembly violated the manifest and is an
+``+faststart``. Alignment is verified twice (3.3 hardening): **every segment
+is probed right after it renders** and must match its manifest beat within
+~1 frame — a mis-timed beat fails immediately, naming the beat, instead of
+hiding inside the final total's cumulative tolerance — and after encoding, the
+concatenated file's probed duration is checked against the manifest total.
+Either deviation means assembly violated the manifest and is an
 :class:`~app.assembly.AssemblyError` — the deliverable is never silently
 off-timing.
 
@@ -110,6 +113,7 @@ def stitch_video(
                 project_root=Path(project_root), out=segment,
                 width=target_width, height=target_height, fps=manifest.fps_target,
             )
+            _verify_segment(runner, segment, beat.index, beat.duration_s, manifest.fps_target)
             segments.append(segment)
         _concat(runner, segments, out_path)
         _verify_duration(runner, out_path, manifest)
@@ -190,6 +194,23 @@ def _render_segment(
         *(_encoder_args()),
         "-y", out,
     ], f"beat {beat_index}: segment encode failed")
+
+
+def _verify_segment(
+    runner: _Runner, segment: Path, beat_index: int, duration_s: float, fps: int | float
+) -> None:
+    """Per-beat alignment check (3.3): the freshly rendered segment must last
+    exactly its manifest ``duration_s`` within ~1 frame + container slack.
+    Catches a mis-cut beat at its source — the final total check alone could
+    absorb one bad beat into the cumulative ``n/fps`` allowance."""
+    probed = runner.probe_duration(segment)
+    tolerance = 1.0 / float(fps) + _DURATION_GUARD_SLACK_S
+    if abs(probed - duration_s) > tolerance:
+        raise AssemblyError(
+            f"beat {beat_index}: segment lasts {probed:.3f}s but the manifest beat"
+            f" is {duration_s:.3f}s — assembly deviated from the timing manifest"
+            " (the single source of truth); regenerate the beat's assets"
+        )
 
 
 def _concat(runner: _Runner, segments: list[Path], out_path: Path) -> None:

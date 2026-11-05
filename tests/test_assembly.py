@@ -282,7 +282,7 @@ class TestStitchVideo:
 
     def test_duration_deviation_beyond_frame_slack_fails(self, tmp_path: Path):
         class LyingProbe:
-            """Duck-typed FFmpeg: encodes fine, reports a garbage duration."""
+            """Duck-typed FFmpeg: segments probe on-time, the final total lies."""
 
             def run(self, args):
                 out = Path(str(args[-1]))
@@ -290,7 +290,9 @@ class TestStitchVideo:
                 return None
 
             def probe_duration(self, path):
-                return 99.0
+                # beat_001.mp4 (per-beat check) sees its true 3.0s; only the
+                # final concat output lies — that path is what this test covers.
+                return 3.0 if Path(str(path)).name == "beat_001.mp4" else 99.0
 
         manifest = build_manifest("job_x", [BeatSpec(text="a")])
         with pytest.raises(AssemblyError, match="manifest"):
@@ -329,6 +331,113 @@ class TestStitchVideo:
                 target_height=64,
                 ffmpeg=FailingEncoder(),
             )  # type: ignore[arg-type]
+
+
+# --- assembly.video.stitch_video — 3.3 hardening (real assets, exact alignment) ---
+
+
+class TestStitchVideoHardening:
+    """Task 3.3: assembly hardened for real provider assets.
+
+    The 1.12 stitch already normalizes fps/resolution/aspect; hardening pins
+    what real Gemini assets exercise: every segment must render **exactly**
+    its manifest beat (verified per beat, not only in total), 24 kHz mono TTS
+    WAVs land as uniform 44.1 kHz stereo AAC, and platform-dim outputs carry
+    the manifest frame rate with square pixels.
+    """
+
+    def test_segment_deviating_from_manifest_fails_naming_the_beat(self, tmp_path: Path):
+        class LyingSegment:
+            """Segments encode 'fine', but beat 2's segment probes off-timing."""
+
+            def run(self, args):
+                Path(str(args[-1])).write_bytes(b"\x00\x00\x00\x18ftypisom")
+                return None
+
+            def probe_duration(self, path):
+                name = Path(str(path)).name
+                if name == "beat_002.mp4":
+                    return 1.5  # off-manifest: beat 2 is 1.0s in the manifest
+                if name == "final.mp4":
+                    return 2.0  # the total is right — only the per-beat check catches it
+                return 1.0
+
+        root = tmp_path / "proj"
+        _silent_wav(root / "audio" / "beat_01.wav", 1.0)
+        _silent_wav(root / "audio" / "beat_02.wav", 1.0)
+        manifest = build_manifest(
+            "job_x",
+            [
+                BeatSpec(text="one", audio_file="audio/beat_01.wav", duration_s=1.0),
+                BeatSpec(text="two", audio_file="audio/beat_02.wav", duration_s=1.0),
+            ],
+        )
+        visuals = {
+            1: BeatVisual(1, _png(tmp_path / "v1.png"), "image"),
+            2: BeatVisual(2, _png(tmp_path / "v2.png"), "image"),
+        }
+        with pytest.raises(AssemblyError, match=r"beat 2.*manifest"):
+            stitch_video(
+                manifest,
+                visuals,
+                project_root=root,
+                out_path=tmp_path / "final.mp4",
+                target_width=64,
+                target_height=64,
+                ffmpeg=LyingSegment(),
+            )  # type: ignore[arg-type]
+
+    def test_gemini_tts_shape_and_platform_dims_normalize(self, tmp_path: Path):
+        """Real-asset shapes: 24 kHz mono TTS WAV + off-aspect image → exact
+        platform portrait MP4 (h264/aac, 44.1 kHz stereo, 30 fps, square pixels)."""
+        root = tmp_path / "proj"
+        _silent_wav(root / "audio" / "beat_01.wav", 0.9, rate=24_000)  # Gemini TTS shape
+        manifest = build_manifest(
+            "job_x",
+            [BeatSpec(text="one", audio_file="audio/beat_01.wav", duration_s=0.9)],
+        )
+        visuals = {1: BeatVisual(1, _png(tmp_path / "v.png", 1344, 768), "image")}
+        out = tmp_path / "out.mp4"
+        stitch_video(
+            manifest,
+            visuals,
+            project_root=root,
+            out_path=out,
+            target_width=1080,
+            target_height=1920,  # tiktok/reels/shorts portrait platform dims
+        )
+        video, audio, duration = _probe_streams(FFmpeg(), out)
+        assert video["codec_name"] == "h264"
+        assert (video["width"], video["height"]) == (1080, 1920)
+        assert video["avg_frame_rate"] == "30/1"
+        assert video["pix_fmt"] == "yuv420p"
+        assert video["sample_aspect_ratio"] == "1:1"
+        assert audio["codec_name"] == "aac"
+        assert audio["sample_rate"] == "44100"
+        assert audio["channels"] == 2
+        assert duration == pytest.approx(0.9, abs=1 / 30 + MS)
+
+    def test_jpeg_visual_stitches(self, tmp_path: Path):
+        """A JPEG visual (image providers may return JPEG) demuxes and stitches."""
+        jpg = export_image(
+            _png(tmp_path / "src.png", 128, 96),
+            tmp_path / "v.jpg",
+            width=320,
+            height=180,
+            container="jpg",
+        )
+        manifest = build_manifest("job_x", [BeatSpec(text="a")])  # silent default 3.0s
+        out = stitch_video(
+            manifest,
+            {1: BeatVisual(1, jpg, "image")},
+            project_root=tmp_path,
+            out_path=tmp_path / "out.mp4",
+            target_width=320,
+            target_height=180,
+        )
+        _, _, duration = _probe_streams(FFmpeg(), out)
+        assert out.is_file() and out.stat().st_size > 0
+        assert duration == pytest.approx(3.0, abs=1 / 30 + MS)
 
 
 # --- assembly.images.export_image -------------------------------------------------
