@@ -7,7 +7,7 @@
       "image": "usd_per_image — price per generated image",
       "video": "usd_per_second — price per second of clip; estimates ceil fractional seconds up"
     },
-    "warning": "Research spike 2.0 (2026-11-06) verified the model IDs and prices below against Google's official docs — see research/gemini-api.md for every derivation and citation. The gemini 'verified' flag is intentionally left false here because tests/test_cost.py:131 still asserts a non-mock placeholder must exist; flip it to true (and relax that assertion) when wiring the real provider (tasks 2.1/2.2).",
+    "warning": "Research spike 2.0 (2026-11-06) verified the model IDs and prices below against Google's official docs — see research/gemini-api.md for every derivation and citation. The gemini 'verified' flag is true since task 2.3 wired the real TTS provider (the placeholder era ended with the spike; test_cost.py pins the spike-verified models/prices).",
     "recheck": [
       "2026-12-01: Gemini 2.5 family auto-routing begins; 2.5 TTS deprecation flow — do not add 2.5 models back.",
       "2027-01-01: gemini-3.8-flash-tts / flash-lite-tts audio prices double ($9->$18, $6->$12 per 1M audio tokens) — re-derive tts price.",
@@ -27,8 +27,8 @@
     },
     "gemini": {
       "label": "Google Gemini API (AI Studio key) — BUILD_PLAN §0 recommendation",
-      "verified": false,
-      "note": "Prices and model IDs verified 2026-11-06 by research spike 2.0 (research/gemini-api.md); flag stays false only because test_cost.py:131 requires a non-mock placeholder until the lead flips it. TTS has a free tier; image and video require a paid (billing-enabled) project — fresh keys sit in Tier 1 with a $10-per-10-min Google-side spend limiter, so expect 429s below the app's own cap.",
+      "verified": true,
+      "note": "Prices and model IDs verified 2026-11-06 by research spike 2.0 (research/gemini-api.md). TTS has a free tier; image and video require a paid (billing-enabled) project — fresh keys sit in Tier 1 with a $10-per-10-min Google-side spend limiter, so expect 429s below the app's own cap.",
       "engines": {
         "tts": {
           "model": "gemini-3.8-flash-tts",

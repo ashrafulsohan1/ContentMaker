@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -46,12 +46,17 @@ from app.assembly.ffmpeg import FFmpeg
 from app.assembly.images import export_image
 from app.assembly.video import BeatVisual, stitch_video
 from app.core.jobs import Job
-from app.scripting.manifest import BeatSpec, TimingManifest, build_manifest, write_manifest
+from app.scripting.manifest import (
+    BeatSpec,
+    TimingManifest,
+    build_manifest,
+    with_probed_durations,
+    write_manifest,
+)
 
 VISUAL_KINDS = frozenset({"image", "video"})
 PLAN_SUFFIX = "_plan.json"
 MANIFEST_SUFFIX = "_manifest.json"
-_MS_DECIMALS = 3
 
 
 # --- job plan (options-step record; keeps assembly restart-safe) ---------------
@@ -232,10 +237,11 @@ def assemble_job(project_dir: Path, job: Job, *, ffmpeg: FFmpeg | None = None) -
     # The §6.2 schema numbers manifest beats 1..n contiguously, so the stitch
     # inputs are keyed by manifest position; a partial job's retained beats are
     # renumbered (audio_file/prompt keep the provenance to the original beat).
+    # audio_file carries the ABSOLUTE asset path here — probing needs a
+    # resolvable file — and is relativized for the manifest below.
     for position, index in enumerate(beat_indexes, 1):
         text = ""
-        audio_file: str | None = None
-        duration_s: float | None = None
+        audio_file: Path | None = None
         tts = done_tts.get(index)
         if tts is not None:
             audio_path = Path(tts.out_path)
@@ -243,8 +249,7 @@ def assemble_job(project_dir: Path, job: Job, *, ffmpeg: FFmpeg | None = None) -
             text = str(tts.params.get("text") or "").strip()
             if not text:
                 raise AssemblyError(f"beat {index}: tts asset has no text to record")
-            audio_file = _project_relative(project_dir, audio_path)
-            duration_s = round(runner.probe_duration(audio_path), _MS_DECIMALS)
+            audio_file = audio_path.resolve()
         visual = done_visual.get(index)
         if visual is not None:
             visual_path = Path(visual.out_path)
@@ -253,10 +258,28 @@ def assemble_job(project_dir: Path, job: Job, *, ffmpeg: FFmpeg | None = None) -
             if not text:
                 raise AssemblyError(f"beat {index}: visual asset has no prompt to record")
             visuals[position] = BeatVisual(index=position, file=visual_path, kind=visual.kind)
-        specs.append(BeatSpec(text=text, label=None, audio_file=audio_file,
-                              duration_s=duration_s))
+        specs.append(BeatSpec(text=text, label=None, audio_file=audio_file))
 
-    manifest = build_manifest(job.id, specs)
+    # Durations enter the manifest ffprobed from the files on disk — never a
+    # provider-reported value (BUILD_PLAN §1.2 "Durations", task 2.4);
+    # with_probed_durations is the single probe seam. The §6.2 audio_file is
+    # project-relative with forward slashes; audio outside the project stays
+    # absolute so the manifest still resolves it.
+    probed = with_probed_durations(specs, probe=runner.probe_duration)
+    manifest = build_manifest(
+        job.id,
+        [
+            replace(
+                spec,
+                audio_file=(
+                    _project_relative(project_dir, Path(spec.audio_file))
+                    if spec.audio_file is not None
+                    else None
+                ),
+            )
+            for spec in probed
+        ],
+    )
     manifest_path = write_manifest(
         manifest, project_dir / "plan" / f"{job.id}{MANIFEST_SUFFIX}"
     )

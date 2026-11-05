@@ -14,7 +14,8 @@ Assembles the local single-user app:
 
 Dependencies are injectable for tests: ``create_app(registry=…, key_store=…,
 key_probe=…, projects_root=…)``. Defaults point at the repo's ``projects/``
-folder, a registry holding only the zero-network mock providers (§1.2), and a
+folder, a registry of the zero-network mock providers (§1.2) plus the
+key-gated Gemini TTS adapter (BUILD_PLAN 2.3), and a
 key store at ``<repo>/state/keys.json``.
 """
 
@@ -37,6 +38,8 @@ from app.core.maintenance import DEFAULT_INTERVAL_S, DEFAULT_MIN_AGE_S, Maintena
 from app.engines.mocks import MockImageProvider, MockTTSProvider, MockVideoProvider
 from app.engines.registry import ENGINES, Registry
 from app.providers import catalog
+from app.providers.gemini.client import GeminiClient
+from app.providers.gemini.tts import GeminiTTSProvider
 from app.web import routes as web_routes
 from app.web import settings as web_settings
 from app.web.flow import FlowStore
@@ -54,12 +57,21 @@ def _assembler_for(projects_root: Path):
     return _assemble
 
 
-def default_registry() -> Registry:
-    """Mock-only registry: every engine available at zero cost, zero network."""
+def default_registry(key_store: KeyStore | None = None) -> Registry:
+    """Mocks for every engine (zero-cost, zero-network dry-run of §1.2) plus —
+    when a key store is available — the Gemini TTS adapter (BUILD_PLAN 2.3).
+
+    The adapter reads the key from the store at call time, so registering it
+    before any key exists is safe: the flow's key gate (§6.5) rejects a
+    key-less BYOK selection before the provider is ever called, and a call
+    that slips through fails with the add-your-key-in-Settings error.
+    """
     registry = Registry()
     registry.register("tts", MockTTSProvider())
     registry.register("image", MockImageProvider())
     registry.register("video", MockVideoProvider())
+    if key_store is not None:
+        registry.register("tts", GeminiTTSProvider(GeminiClient(key_store)))
     return registry
 
 
@@ -92,11 +104,15 @@ def create_app(
     key_probe=None,
 ) -> FastAPI:
     app = FastAPI(title="ContentMaker", version="0.1.0", lifespan=_lifespan)
-    app.state.registry = registry if registry is not None else default_registry()
+    # The key store exists before the registry: the Gemini TTS adapter (2.3)
+    # is registered against it and reads the key at call time (§6.5).
+    app.state.key_store = key_store if key_store is not None else _default_key_store()
+    app.state.registry = (
+        registry if registry is not None else default_registry(key_store=app.state.key_store)
+    )
     app.state.projects_root = (
         Path(projects_root) if projects_root is not None else _default_projects_root()
     )
-    app.state.key_store = key_store if key_store is not None else _default_key_store()
     # The key probe dials the provider the key belongs to (§6.5); injectable so
     # tests never touch the network.
     app.state.key_probe = key_probe if key_probe is not None else catalog.test_provider_key

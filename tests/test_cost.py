@@ -121,15 +121,24 @@ def img_spec(root: Path, index: int) -> object:
 # --- price table: shipped config file ----------------------------------------
 
 
-def test_prices_file_has_mock_and_placeholder_real_providers():
+def test_prices_file_has_mock_and_spike_verified_gemini():
     table = load_prices()
     assert table.currency == "USD"
     mock = table.providers["mock"]
     assert mock.verified is True, "mock pricing is exact, not a placeholder"
     for engine in ("tts", "image", "video"):
         assert mock.engines[engine].price == 0.0
-    placeholders = [p for p in table.providers.values() if not p.verified]
-    assert placeholders, "non-mock providers must be flagged verified:false until the M2 spike"
+    # Research spike 2.0 (2026-11-06, research/gemini-api.md §8) verified the
+    # gemini models and prices — no placeholder remains (BUILD_PLAN 2.3 wired
+    # the real TTS provider; the placeholder assertion was relaxed there).
+    gemini = table.providers["gemini"]
+    assert gemini.verified is True
+    assert gemini.engines["tts"].model == "gemini-3.8-flash-tts"
+    assert gemini.engines["tts"].price == 0.02
+    assert gemini.engines["image"].model == "gemini-nano-banana-2.1"
+    assert gemini.engines["image"].price == 0.0504
+    assert gemini.engines["video"].model == "gemini-omni-1.1-flash"
+    assert gemini.engines["video"].price == 0.102
 
 
 def test_prices_path_points_at_editable_config():

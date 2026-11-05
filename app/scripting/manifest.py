@@ -22,7 +22,8 @@ nothing else. Consequences baked in here:
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+import math
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -251,6 +252,63 @@ def build_manifest(
             "beats": beat_data,
         }
     )
+
+
+def with_probed_durations(
+    specs: Sequence[BeatSpec],
+    *,
+    probe: Callable[[Path | str], float],
+) -> tuple[BeatSpec, ...]:
+    """Fill audio-bearing specs' durations by **ffprobing each audio file**.
+
+    The one seam where audio durations enter the manifest (BUILD_PLAN 2.4;
+    §1.2 "Durations"): a spec with an ``audio_file`` gets its ``duration_s``
+    from ``probe`` — any pre-filled value (a provider-reported duration, a
+    stale cache) is **discarded and re-probed**, never trusted. Silent specs
+    pass through untouched and keep their build-time default. Probed values
+    are rounded to whole milliseconds; a failed or non-positive probe raises
+    :class:`ManifestError` naming the beat and file — a manifest must never
+    carry a guessed duration.
+
+    ``audio_file`` paths must resolve on the filesystem (absolute paths are
+    the safe form — the probe runs in the caller's process); the §6.2
+    project-relative spelling is a manifest-presentation concern, applied
+    after probing.
+    """
+    probed: list[BeatSpec] = []
+    for position, spec in enumerate(specs, 1):
+        if spec.audio_file is None:
+            probed.append(spec)
+            continue
+        probed.append(
+            BeatSpec(
+                text=spec.text,
+                label=spec.label,
+                audio_file=spec.audio_file,
+                duration_s=_probe_one(position, spec.audio_file, probe),
+            )
+        )
+    return tuple(probed)
+
+
+def _probe_one(
+    position: int, audio_file: Path | str, probe: Callable[[Path | str], float]
+) -> float:
+    """One file's probed duration, ms-rounded and validated; loud on failure."""
+    where = f"beat {position}: audio_file {Path(audio_file).name}"
+    try:
+        duration = float(probe(audio_file))
+    except Exception as exc:
+        raise ManifestError(
+            f"{where}: could not probe the audio duration ({exc}) — the"
+            " timing manifest is written from ffprobed values only."
+        ) from exc
+    if not math.isfinite(duration) or duration <= 0:
+        raise ManifestError(
+            f"{where}: probed duration must be a positive number of seconds,"
+            f" got {duration!r} — the audio file looks empty or invalid."
+        )
+    return round(duration, _MS_DECIMALS)
 
 
 def write_manifest(manifest: TimingManifest, path: Path) -> Path:
