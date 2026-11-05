@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}ContentMaker — Settings{% endblock %}
+{% block content %}
+<h2>Settings — API keys &amp; engines</h2>
+<p class="hint">Your keys are stored locally in <code>state/keys.json</code> (gitignored, never committed)
+and are sent only to the provider each key belongs to.</p>
+<div id="settings-body">
+  {% include "_settings_body.html" %}
+</div>
+{% endblock %}

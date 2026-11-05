@@ -50,9 +50,9 @@ from app.web.flow import (
     FlowOptions,
     FlowState,
     FlowStore,
-    available_engines,
     beats_from_script,
     build_assets,
+    engine_availability,
     engines_needed,
     merge_with_next,
     page_slice,
@@ -305,7 +305,9 @@ async def submit_options(request: Request):
         )
     )
     try:
-        providers = resolve_providers(options, request.app.state.registry)
+        providers = resolve_providers(
+            options, request.app.state.registry, request.app.state.key_store
+        )
     except FlowError as exc:
         errors.append(str(exc))
     if errors:
@@ -376,7 +378,7 @@ def _render_options(
             "dry_run": options.dry_run,
             "spend_cap_usd": options.spend_cap_usd,
             "engines": list(ENGINES),
-            "availability": available_engines(registry),
+            "availability": engine_availability(registry, request.app.state.key_store),
             "needed": engines_needed(options),
             "errors": errors or [],
         },

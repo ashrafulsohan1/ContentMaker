@@ -116,3 +116,14 @@ code { background: #efece6; padding: 0.05rem 0.3rem; border-radius: 4px; font-si
   display: block; margin-top: 0.5rem; max-width: 100%;
   max-height: 20rem; border: 1px solid var(--line); border-radius: 6px; background: #000;
 }
+
+/* Settings screen: BYOK keys + engine defaults (BUILD_PLAN 2.1). */
+.site-nav { margin: 0.25rem 0 0; font-size: 0.9rem; }
+.provider-card {
+  background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+  padding: 0.6rem 0.75rem; margin: 0.6rem 0;
+}
+.provider-card h4 { margin: 0 0 0.25rem; }
+.inline { display: flex; gap: 0.5rem; align-items: center; margin: 0.4rem 0; flex-wrap: wrap; }
+.warn { color: #8a5a00; }
+.provider { white-space: nowrap; }

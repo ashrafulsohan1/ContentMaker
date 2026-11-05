@@ -30,8 +30,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.core.jobs import AssetSpec
+from app.core.keys import KeyStore
 from app.core.projects import Project
 from app.engines.registry import ENGINES, Registry
+from app.providers.catalog import PROVIDERS
 from app.scripting.manifest import DEFAULT_SILENT_BEAT_DURATION_S
 from app.scripting.segment import split_into_sentences
 
@@ -53,6 +55,19 @@ class MissingEngineError(FlowError):
             " Settings, or tick dry-run to use the zero-cost mock providers."
         )
         self.engine = engine
+
+
+class MissingKeyError(FlowError):
+    """A needed BYOK provider has no configured key (§6.5: say what's missing)."""
+
+    def __init__(self, engine: str, provider_id: str, label: str) -> None:
+        super().__init__(
+            f"The {engine} engine is set to {label}, but no {label} API key is"
+            " configured — add your key in Settings, or tick dry-run to use the"
+            " zero-cost mock providers."
+        )
+        self.engine = engine
+        self.provider_id = provider_id
 
 
 @dataclass
@@ -232,6 +247,51 @@ def available_engines(registry: Registry) -> dict[str, list[str]]:
     return {engine: [p.provider_id for p in registry.providers_for(engine)] for engine in ENGINES}
 
 
+def engine_availability(
+    registry: Registry, key_store: KeyStore | None = None
+) -> dict[str, list[dict[str, Any]]]:
+    """Engine → provider rows for the availability display, keys included (§6.5).
+
+    Each row: ``id``/``label``, ``configured`` (BYOK: a key is on file; mocks
+    are always runnable), ``is_default`` (the key store's per-engine default)
+    and ``kind`` (``byok`` | ``mock`` | ``builtin``). Catalog providers appear
+    even without a key — the UI must be able to say *what's* missing.
+    """
+    defaults = key_store.defaults() if key_store is not None else {}
+    rows: dict[str, list[dict[str, Any]]] = {}
+    for engine in ENGINES:
+        entries: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for info in PROVIDERS.values():
+            if engine in info.engines:
+                seen.add(info.id)
+                entries.append(
+                    {
+                        "id": info.id,
+                        "label": info.label,
+                        "configured": bool(key_store is not None and key_store.has_key(info.id)),
+                        "is_default": defaults.get(engine) == info.id,
+                        "kind": "byok",
+                    }
+                )
+        for provider in registry.providers_for(engine):
+            pid = provider.provider_id
+            if pid in seen:
+                continue
+            kind = "mock" if pid == "mock" else "builtin"
+            entries.append(
+                {
+                    "id": pid,
+                    "label": "Mock (dry-run)" if pid == "mock" else pid,
+                    "configured": True,
+                    "is_default": False,
+                    "kind": kind,
+                }
+            )
+        rows[engine] = entries
+    return rows
+
+
 def validate_options(
     options: FlowOptions,
     *,
@@ -280,13 +340,18 @@ def validate_options(
 
 
 def resolve_providers(
-    options: FlowOptions, registry: Registry
+    options: FlowOptions,
+    registry: Registry,
+    key_store: KeyStore | None = None,
 ) -> dict[str, str]:
     """Engine → provider id for the job; dry-run forces mocks (§1.2).
 
-    Explicit user selections win; anything unresolved falls back to the only
-    registered provider, and a needed engine with none raises
-    ``MissingEngineError`` naming exactly what's missing (§6.5).
+    Resolution order per needed engine: explicit user selection, then the key
+    store's per-engine default (§6.5), then the first registered provider. A
+    BYOK provider (from the catalog) runs only with a configured key —
+    otherwise ``MissingKeyError`` names the engine, the provider and exactly
+    what to do (§6.5); with a key but no registered adapter, the error says
+    the build doesn't ship that engine's provider yet.
     """
     resolved: dict[str, str] = {}
     for engine in engines_needed(options):
@@ -298,18 +363,40 @@ def resolve_providers(
             resolved[engine] = "mock"
             continue
         chosen = options.providers.get(engine)
-        if chosen:
-            try:
-                registry.get(engine, chosen)  # names engine + provider when unknown
-            except ValueError as exc:
-                raise FlowError(str(exc)) from None
-            resolved[engine] = chosen
+        default = key_store.default_for(engine) if key_store is not None else None
+        provider_id = chosen or default
+        if provider_id:
+            resolved[engine] = _require_runnable(engine, provider_id, registry, key_store)
             continue
         registered = registry.providers_for(engine)
         if not registered:
             raise MissingEngineError(engine)
         resolved[engine] = registered[0].provider_id
     return resolved
+
+
+def _require_runnable(
+    engine: str,
+    provider_id: str,
+    registry: Registry,
+    key_store: KeyStore | None,
+) -> str:
+    """Gate one BYOK/explicit provider choice on key + adapter (§6.5)."""
+    info = PROVIDERS.get(provider_id)
+    if info is not None:
+        if key_store is None or not key_store.has_key(provider_id):
+            raise MissingKeyError(engine, provider_id, info.label)
+        if not any(p.provider_id == provider_id for p in registry.providers_for(engine)):
+            raise FlowError(
+                f"{info.label} is configured for the {engine} engine, but this build"
+                f" of ContentMaker does not include its {engine} provider yet —"
+                " pick another provider or tick dry-run."
+            )
+    try:
+        registry.get(engine, provider_id)  # names engine + provider when unknown
+    except ValueError as exc:
+        raise FlowError(str(exc)) from None
+    return provider_id
 
 
 def build_assets(

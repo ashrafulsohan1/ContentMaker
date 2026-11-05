@@ -70,8 +70,7 @@
       <tr>
         <td>{{ engine }}</td>
         <td>
-          {% if availability[engine] %}{{ availability[engine] | join(", ") }}
-          {% else %}<span class="error">not available — add an API key in Settings</span>{% endif %}
+          {% for p in availability[engine] %}<span class="provider">{{ p.label }} <em>({{ p.id }})</em>{% if p.is_default %} · default{% endif %}{% if not p.configured %} — not available, add the key in Settings{% endif %}</span>{% if not loop.last %}, {% endif %}{% endfor %}
         </td>
         <td>{% if engine in needed %}yes{% else %}—{% endif %}</td>
       </tr>

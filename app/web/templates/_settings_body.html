@@ -1,0 +1,71 @@
+{% if notice %}<div class="notice">{{ notice }}</div>{% endif %}
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+<section>
+  <h3>API keys</h3>
+  {% for p in providers %}
+  <div class="provider-card" id="provider-{{ p.id }}">
+    <h4>{{ p.label }} <small class="hint">({{ p.id }})</small></h4>
+    <p class="hint">{{ p.key_hint }}</p>
+    {% if p.key_configured %}
+    <p>Key on file: <code>{{ p.key_masked }}</code> — serves: {{ p.engines | join(", ") }}</p>
+    {% else %}
+    <p class="warn">No key configured</p>
+    {% endif %}
+    <form method="post" action="/settings/keys/{{ p.id }}" class="inline">
+      <label for="key-{{ p.id }}">{{ p.key_label }}</label>
+      <input type="password" id="key-{{ p.id }}" name="api_key" autocomplete="off"
+             placeholder="paste the key — it is never shown again">
+      <button type="submit">{{ "Replace key" if p.key_configured else "Add key" }}</button>
+    </form>
+    <form method="post" action="/settings/keys/{{ p.id }}/test" class="inline">
+      <button type="submit">Test key</button>
+    </form>
+    {% if p.key_configured %}
+    <form method="post" action="/settings/keys/{{ p.id }}/remove" class="inline">
+      <button type="submit">Remove key</button>
+    </form>
+    {% endif %}
+    {% if test_result and test_provider == p.id %}
+    <p class="{{ 'notice' if test_result.ok else 'error' }}">Key test: {{ test_result.message }}</p>
+    {% endif %}
+    <p class="hint"><a href="{{ p.key_url }}">Get a {{ p.key_label }}</a> ·
+       <a href="{{ p.docs_url }}">Provider docs</a></p>
+  </div>
+  {% endfor %}
+</section>
+
+<section>
+  <h3>Engines &amp; defaults</h3>
+  <table>
+    <tr><th>Engine</th><th>Providers with a key</th><th>Default for new jobs</th></tr>
+    {% for engine, entry in engines.items() %}
+    {% set keyed = entry.providers | selectattr("key_configured") | list %}
+    <tr>
+      <td>{{ engine }}</td>
+      <td>
+        {% if keyed %}
+          {% for p in keyed %}{{ p.label }}{% if p.is_default %} <em>(default)</em>{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}
+        {% else %}
+          <span class="warn">no key configured — dry-run only</span>
+        {% endif %}
+      </td>
+      <td>
+        {% if keyed %}
+        <form method="post" action="/settings/defaults/{{ engine }}" class="inline">
+          <select name="provider" aria-label="Default provider for the {{ engine }} engine">
+            <option value="" {% if not entry.default %}selected{% endif %}>no default</option>
+            {% for p in keyed %}
+            <option value="{{ p.id }}" {% if p.is_default %}selected{% endif %}>{{ p.label }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit">Set</button>
+        </form>
+        {% else %}—{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="hint">Dry-run mock providers are always available and cost nothing.
+  The default is what new jobs use for an engine when you don't pick one.</p>
+</section>

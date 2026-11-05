@@ -274,11 +274,24 @@ def check_boot(ctx: dict[str, Any]) -> str:
 
 
 def check_no_httpx(ctx: dict[str, Any]) -> str:
-    """AST scan: no app/ module may import httpx (no outbound HTTP in M1)."""
+    """AST scan: no app/ module outside app/providers/ may import httpx.
+
+    M1 gate was app-wide (zero network anywhere). From M2 the provider
+    adapters (app/providers/) legitimately dial their own cloud API — that is
+    the ONLY sanctioned outbound HTTP in the app, and each key travels solely
+    to the provider it belongs to (spec 6.5). The rest of the app — UI flow,
+    jobs, cost, assembly, settings/storage — must stay network-free, which is
+    what this check continues to prove; the dry-run flow below never dials.
+    """
     app_dir = ROOT / "app"
+    providers_dir = app_dir / "providers"
     scanned = 0
+    exempted = 0
     offenders: list[str] = []
     for path in sorted(app_dir.rglob("*.py")):
+        if providers_dir in path.parents:
+            exempted += 1  # provider adapters own the outbound HTTP (task 2.1+)
+            continue
         scanned += 1
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
@@ -291,8 +304,11 @@ def check_no_httpx(ctx: dict[str, Any]) -> str:
             if any(name == "httpx" or name.startswith("httpx.") for name in names):
                 offenders.append(str(path.relative_to(app_dir)))
     if offenders:
-        _fail(f"httpx imported by app code: {offenders}")
-    return f"{scanned} app/ modules scanned, 0 httpx imports (gate: zero network)"
+        _fail(f"httpx imported outside app/providers/: {offenders}")
+    return (
+        f"{scanned} app/ modules scanned, 0 httpx imports"
+        f" ({exempted} provider modules exempt — task 2.1 scope)"
+    )
 
 
 def check_guard(ctx: dict[str, Any]) -> str:
