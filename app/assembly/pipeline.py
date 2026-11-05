@@ -15,9 +15,12 @@
    per-beat visuals (images looped, clips loop-padded), per-beat audio.
 3. **Image/carousel formats** — one platform-correct export per completed
    beat (``export_image``), with the plan's optional per-image text overlay
-   (spec §6.4; ruling in DECISIONS D13 — ffmpeg drawtext stays, no Pillow);
-   a carousel *is* that file set, and single-image formats export every beat
-   so the user picks (per-beat selection policy lands with task 3.4).
+   (spec §6.4; ruling in DECISIONS D13 — ffmpeg drawtext stays, no Pillow).
+   The selection policy (DECISIONS D14): a carousel *is* the whole file set,
+   so the plan's image-count contract (``min_images``/``max_images`` from
+   platforms.json, task 3.4) is enforced at assembly — a set the platform
+   would reject is never emitted; single-image formats are not count-capped
+   (every beat exports, the user picks at download).
 
 Target resolution/container/fps come from the **job plan** — a small
 machine-readable record (``plan/<job_id>_plan.json``) the options step writes
@@ -77,6 +80,8 @@ class JobPlan:
     container: str  # "mp4" | "jpg" | "png"
     fps: int | float
     overlay_text: str | None = None  # image/carousel only (§6.4); video ignores it
+    min_images: int = 1  # carousel count contract (task 3.4); enforced on carousel only
+    max_images: int = 0  # 0 = uncapped (the pre-3.4 plan-file default)
 
 
 def write_job_plan(
@@ -91,6 +96,8 @@ def write_job_plan(
     container: str,
     fps: int | float,
     overlay_text: str | None = None,
+    min_images: int = 1,
+    max_images: int = 0,
 ) -> Path:
     """Write ``plan/<job_id>_plan.json``; returns the path."""
     plan = JobPlan(
@@ -103,6 +110,8 @@ def write_job_plan(
         container=container,
         fps=fps,
         overlay_text=overlay_text,
+        min_images=int(min_images),
+        max_images=int(max_images),
     )
     path = _plan_path(project_dir, job_id)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -116,6 +125,8 @@ def write_job_plan(
         "container": plan.container,
         "fps": plan.fps,
         "overlay_text": plan.overlay_text,
+        "min_images": plan.min_images,
+        "max_images": plan.max_images,
     }
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return path
@@ -145,6 +156,9 @@ def read_job_plan(project_dir: Path, job_id: str) -> JobPlan | None:
             container=str(data["container"]),
             fps=data["fps"],
             overlay_text=overlay,
+            # pre-3.4 plan files omit the count keys → min 1, uncapped max
+            min_images=int(data.get("min_images", 1)),
+            max_images=int(data.get("max_images", 0)),
         )
     except KeyError as exc:
         raise AssemblyError(f"job plan {path.name} is missing key {exc.args[0]!r}") from exc
@@ -314,6 +328,31 @@ def _require_on_disk(beat_index: int, path: Path, what: str) -> None:
         )
 
 
+def _require_carousel_count(plan: JobPlan, count: int) -> None:
+    """The platform's image-count contract for this carousel (task 3.4, §6.4).
+
+    The options step already rejects beat counts outside
+    ``[min_images, max_images]`` before a job exists; this is the assembly-time
+    backstop for what changed *after* creation — a partial job whose failed
+    beats were skipped would otherwise quietly export a set the platform
+    rejects on upload. The refusal is loud and names the remedy; the job keeps
+    its completed assets, so a retry + re-assemble finishes the set.
+    ``max_images == 0`` means uncapped (the pre-3.4 plan-file default).
+    """
+    if count < plan.min_images:
+        raise AssemblyError(
+            f"carousel {plan.format_id} needs at least {plan.min_images} images but"
+            f" only {count} beat visual(s) completed — retry the failed beat(s) in"
+            " the job monitor, then re-assemble"
+        )
+    if plan.max_images > 0 and count > plan.max_images:
+        raise AssemblyError(
+            f"carousel {plan.format_id} holds at most {plan.max_images} images but"
+            f" {count} beats completed — merge beats or pick another format, then"
+            " re-assemble"
+        )
+
+
 def _project_relative(project_dir: Path, path: Path) -> str:
     """Manifest audio_file: project-relative forward slashes when possible (§6.2)."""
     try:
@@ -366,6 +405,8 @@ def _build_deliverables(
         )
         return [out]
     extension = "jpg" if plan.container in ("jpg", "jpeg") else "png"
+    if plan.kind == "carousel":
+        _require_carousel_count(plan, len(visuals))
     outs = []
     for index in sorted(visuals):
         out = out_dir / f"{base}_beat_{index:02d}.{extension}"

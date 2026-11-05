@@ -28,6 +28,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from starlette.staticfiles import StaticFiles
 
+from app.api import export as api_export
 from app.api import jobs as api_jobs
 from app.api import settings as api_settings
 from app.api import sse as api_sse
@@ -139,6 +140,7 @@ def create_app(
     app.include_router(api_jobs.router)
     app.include_router(api_settings.router)
     app.include_router(api_sse.router)
+    app.include_router(api_export.router)
     app.include_router(web_settings.router)
     app.include_router(web_routes.router)
     app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")

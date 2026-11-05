@@ -16,6 +16,7 @@ progress, running spend, a cancel button and per-asset retry buttons — always
 from the persisted state, so a plain reload reattaches to the running job; with
 JS enabled, ``/static/monitor.js`` streams the SSE feed (``app.api.sse``).
 """
+
 from __future__ import annotations
 
 import html
@@ -327,7 +328,8 @@ async def submit_options(request: Request):
             request, flow, errors=[job.error or "Cost estimation failed."], sticky=options
         )
     # Persist what assembly will need when the job finalizes (restart-safe,
-    # §6.6): the chosen format's kind/resolution/container live in plan/.
+    # §6.6): the chosen format's kind/resolution/container and its carousel
+    # image-count contract live in plan/.
     write_job_plan(
         flow.project.path,
         job_id=job.id,
@@ -338,6 +340,8 @@ async def submit_options(request: Request):
         height=format_spec.resolution[1],
         container=format_spec.container,
         fps=DEFAULT_FPS,
+        min_images=format_spec.min_images,
+        max_images=format_spec.max_images,
     )
     flow.options = options
     flow.job_id = job.id
@@ -413,9 +417,7 @@ def _parse_options(form: FormData) -> tuple[FlowOptions, list[str]]:
             if not math.isfinite(pace) or not MIN_PACE <= pace <= MAX_PACE:
                 raise ValueError
         except ValueError:
-            errors.append(
-                f"Pace must be between {MIN_PACE} and {MAX_PACE} (1.0 is normal speed)."
-            )
+            errors.append(f"Pace must be between {MIN_PACE} and {MAX_PACE} (1.0 is normal speed).")
             pace = 1.0
             pace_raw = ""
 
@@ -442,8 +444,7 @@ def _parse_options(form: FormData) -> tuple[FlowOptions, list[str]]:
         spend_cap_usd=spend_cap,
     )
     options.providers = {
-        engine: str(form.get(f"provider_{engine}") or "").strip()
-        for engine in ENGINES
+        engine: str(form.get(f"provider_{engine}") or "").strip() for engine in ENGINES
     }
     options.providers = {e: p for e, p in options.providers.items() if p}
 
@@ -501,9 +502,7 @@ def confirm_page(job_id: str, request: Request):
     else:
         kinds = {asset.kind for asset in job.assets}
         audio_display = "on" if "tts" in kinds else "off"
-        visual_display = (
-            "video" if "video" in kinds else ("images" if "image" in kinds else "none")
-        )
+        visual_display = "video" if "video" in kinds else ("images" if "image" in kinds else "none")
         style_display = None
     dry_run = (
         options.dry_run
@@ -674,6 +673,7 @@ def retry_asset(job_id: str, asset_id: int, request: Request):
 # Deliverables are previewed inline (img/video) and served from output/ —
 # traversal is neutralized by resolving inside the project's output dir only.
 
+
 @router.post("/jobs/{job_id}/assemble")
 def assemble_job_route(job_id: str, request: Request):
     engine = engine_of(request)
@@ -686,9 +686,10 @@ def assemble_job_route(job_id: str, request: Request):
         return _monitor_response(request, job, status_code=409, error=str(exc))
     count = len(_deliverable_rows(request, job))
     return _monitor_response(
-        request, job,
+        request,
+        job,
         notice=f"Deliverables re-assembled ({count} file{'s' if count != 1 else ''})"
-               " from the job's assets — preview below.",
+        " from the job's assets — preview below.",
     )
 
 
