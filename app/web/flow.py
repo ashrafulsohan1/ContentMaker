@@ -21,6 +21,7 @@ routes drive:
   from the registry — a needed engine with no provider raises
   ``MissingEngineError`` naming exactly what's missing (§6.5).
 """
+
 from __future__ import annotations
 
 import threading
@@ -95,6 +96,9 @@ class FlowOptions:
     tone: str | None = None
     dry_run: bool = True
     spend_cap_usd: float | None = None
+    # §6.4 optional per-image text overlay (task 3.2); drawn onto image/carousel
+    # exports by assembly (JobPlan.overlay_text) — video ignores it.
+    overlay_text: str | None = None
     providers: dict[str, str] = field(default_factory=dict)  # engine → provider id
 
 
@@ -192,8 +196,12 @@ def split_beat(flow: FlowState, beat_id: str) -> str | None:
         return "This beat is a single sentence — there is nothing to split."
     index = flow.position(beat_id)
     parts = [
-        Beat(id=_new_beat_id(), text=sentence, label=beat.label if i == 0 else None,
-             img_hint=beat.img_hint if i == 0 else None)
+        Beat(
+            id=_new_beat_id(),
+            text=sentence,
+            label=beat.label if i == 0 else None,
+            img_hint=beat.img_hint if i == 0 else None,
+        )
         for i, sentence in enumerate(sentences)
     ]
     flow.beats[index : index + 1] = parts
@@ -305,8 +313,7 @@ def validate_options(
     errors: list[str] = []
     if not options.audio and options.visual == "none":
         errors.append(
-            "There is nothing to generate: turn audio on or choose a visual type"
-            " (images or video)."
+            "There is nothing to generate: turn audio on or choose a visual type (images or video)."
         )
     if options.visual not in VISUAL_CHOICES:
         errors.append(f"Unknown visual type {options.visual!r}.")
@@ -316,13 +323,9 @@ def validate_options(
             f" {format_kind}s; pick images as the visual type instead."
         )
     if format_kind == "video" and options.visual == "none":
-        errors.append(
-            "A video needs visuals to stitch: choose video or images as the visual type."
-        )
+        errors.append("A video needs visuals to stitch: choose video or images as the visual type.")
     if format_kind in ("image", "carousel") and options.visual == "none":
-        errors.append(
-            f"This format delivers {format_kind} images — choose the images visual type."
-        )
+        errors.append(f"This format delivers {format_kind} images — choose the images visual type.")
     if format_kind == "carousel" and options.visual == "images":
         if n_beats < min_images:
             errors.append(

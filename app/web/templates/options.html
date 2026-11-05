@@ -60,6 +60,11 @@
       <option value="images" {% if visual == "images" %}selected{% endif %}>Images (one per beat)</option>
       <option value="video" {% if visual == "video" %}selected{% endif %}>Video clips (one per beat)</option>
     </select>
+    <label for="overlay_text">Text overlay (optional)</label>
+    <input type="text" id="overlay_text" name="overlay_text" value="{{ overlay_text or '' }}"
+           placeholder="e.g. New drop — see the full breakdown">
+    <p class="hint">Drawn onto every exported image (image and carousel formats only) —
+       the visuals are generated without it, so the text stays pixel-exact and editable.</p>
   </fieldset>
 
   <fieldset>

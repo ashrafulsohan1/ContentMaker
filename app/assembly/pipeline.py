@@ -29,7 +29,8 @@ in-memory wizard state. A job created outside the flow has no plan file;
 assembly then falls back to the visual assets' own dimensions and the job id
 for deliverable names. Deliverable names embed the format id (one deliverable
 per selected platform format, §6.4) — two jobs for the same format replace
-its files, which is the intended regeneration semantics.
+its files (superseded files from the previous run are pruned at assembly),
+which is the intended regeneration semantics.
 
 Beats participate iff their asset is ``done``: a visual job beat whose visual
 failed is skipped (its audio stays on disk; retry + re-assemble restores it),
@@ -200,6 +201,11 @@ def media_type_for(filename: str) -> str:
     return _MEDIA_TYPES.get(Path(filename).suffix.lower(), "application/octet-stream")
 
 
+def _deliverable_pattern(base: str) -> re.Pattern[str]:
+    """Names attributable to one base: ``<base>.<ext>`` / ``<base>_beat_NN.<ext>``."""
+    return re.compile(rf"^{re.escape(base)}(?:_beat_\d+)?\.(?P<ext>[A-Za-z0-9]+)$")
+
+
 def list_deliverables(project_dir: Path, job: Job) -> tuple[Deliverable, ...]:
     """The files in ``output/`` attributable to this job's format (or job id).
 
@@ -212,7 +218,7 @@ def list_deliverables(project_dir: Path, job: Job) -> tuple[Deliverable, ...]:
         return ()
     plan = read_job_plan(project_dir, job.id)
     base = plan.format_id if plan else job.id
-    pattern = re.compile(rf"^{re.escape(base)}(?:_beat_\d+)?\.(?P<ext>[A-Za-z0-9]+)$")
+    pattern = _deliverable_pattern(base)
     items: list[Deliverable] = []
     for file in sorted(out_dir.iterdir(), key=lambda p: p.name):
         if not file.is_file() or not pattern.match(file.name):
@@ -389,9 +395,8 @@ def _build_deliverables(
             ffmpeg=runner,
             scratch_dir=project_dir / "state" / "scratch" / job.id,
         )
-        return [out]
-
-    if plan.kind == "video":
+        outs = [out]
+    elif plan.kind == "video":
         out = out_dir / f"{base}.mp4"
         stitch_video(
             manifest,
@@ -403,24 +408,44 @@ def _build_deliverables(
             ffmpeg=runner,
             scratch_dir=project_dir / "state" / "scratch" / job.id,
         )
-        return [out]
-    extension = "jpg" if plan.container in ("jpg", "jpeg") else "png"
-    if plan.kind == "carousel":
-        _require_carousel_count(plan, len(visuals))
-    outs = []
-    for index in sorted(visuals):
-        out = out_dir / f"{base}_beat_{index:02d}.{extension}"
-        export_image(
-            visuals[index].file,
-            out,
-            width=plan.width,
-            height=plan.height,
-            container=extension,
-            overlay_text=plan.overlay_text,
-            ffmpeg=runner,
-        )
-        outs.append(out)
+        outs = [out]
+    else:
+        extension = "jpg" if plan.container in ("jpg", "jpeg") else "png"
+        if plan.kind == "carousel":
+            _require_carousel_count(plan, len(visuals))
+        outs = []
+        for index in sorted(visuals):
+            out = out_dir / f"{base}_beat_{index:02d}.{extension}"
+            export_image(
+                visuals[index].file,
+                out,
+                width=plan.width,
+                height=plan.height,
+                container=extension,
+                overlay_text=plan.overlay_text,
+                ffmpeg=runner,
+            )
+            outs.append(out)
+    # Regeneration semantics (module docstring): a run for a format replaces
+    # that format's file set. Without this, a shorter re-run would leave the
+    # previous run's higher-numbered beat files on disk — and the deliverables
+    # listing and the export ZIP would bundle them into this job's set.
+    _prune_superseded(out_dir, base, {path.name for path in outs})
     return outs
+
+
+def _prune_superseded(out_dir: Path, base: str, keep: set[str]) -> None:
+    """Remove ``base``-attributable files from a previous run's assembly.
+
+    ``keep`` names the current run's deliverables; every other file matching
+    the deliverable pattern is a superseded leftover and is deleted, so
+    ``list_deliverables`` (and the ZIP built from it) always reflects exactly
+    the latest assembly run.
+    """
+    pattern = _deliverable_pattern(base)
+    for file in sorted(out_dir.iterdir()):
+        if file.is_file() and file.name not in keep and pattern.match(file.name):
+            file.unlink()
 
 
 def _dims_from_assets(done_visual: dict[int, Any], runner: FFmpeg) -> tuple[int, int]:

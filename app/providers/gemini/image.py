@@ -21,7 +21,8 @@ package the API actually supports:
   ratio table by gcd reduction (:func:`supported_ratios`: 14 ratios on Nano
   Banana 2.1, the 10 standard ones on 3 Pro Image); an off-table resolution
   (e.g. 1200×630 → 40:21) takes the nearest supported ratio and assembly
-  (3.2) crops to the platform resolution. ``image_size`` defaults to
+  (3.2) scales with aspect preserved and pads onto the platform-resolution
+  canvas (images are padded, never cropped). ``image_size`` defaults to
   ``"2K"`` — 1K is undersized on every ``platforms.json`` target (spike
   §2.3) — and both dimension fields are ALWAYS sent explicitly: the API's
   silent defaults (match-input size / 1:1 square, 1K) are wrong for every
@@ -140,8 +141,9 @@ def aspect_ratio_for(width: int, height: int, *, model: str) -> str:
 
     Exact gcd reduction first (1920×1080 → "16:9"); a resolution off the
     table (1200×630 → 40:21) takes the nearest supported ratio by log-ratio
-    distance — the API has no free-form pixel sizes, and assembly crops to
-    the platform resolution (task 3.2).
+    distance — the API has no free-form pixel sizes, and assembly scales with
+    aspect preserved and pads to the platform resolution (task 3.2; images
+    are padded, never cropped — see app/assembly/images.py).
     """
     if width <= 0 or height <= 0:
         raise GeminiError(

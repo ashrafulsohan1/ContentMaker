@@ -12,6 +12,7 @@ pagination slicing errors, beat ops corrupting neighbors, options that
 generate nothing or violate the selected format, silent spend (estimate +
 explicit confirm gate), and job creation outside the project tree.
 """
+
 from __future__ import annotations
 
 import re
@@ -21,6 +22,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from app.assembly.pipeline import read_job_plan
 from app.engines.mocks import MockTTSProvider
 from app.engines.registry import Registry
 from app.main import create_app
@@ -370,7 +372,7 @@ class TestOptions:
         confirm = client.get(confirm_url)
         assert confirm.status_code == 200
         assert "$0.0000" in confirm.text  # dry-run estimate is exactly zero
-        assert f'/jobs/{job_id}/confirm' in confirm.text  # explicit confirm button
+        assert f"/jobs/{job_id}/confirm" in confirm.text  # explicit confirm button
 
         payload = client.get(f"/api/jobs/{job_id}").json()
         assert payload["status"] == "awaiting_confirmation"
@@ -565,6 +567,53 @@ class TestOptions:
             follow_redirects=False,
         )
         assert ok.status_code == 303  # in-band pace is accepted
+
+    def test_overlay_text_offered_and_recorded_in_the_job_plan(self, tmp_path):
+        """§6.4 optional per-image text overlay (task 3.2) is reachable in the
+        flow: the options form offers it and the chosen text lands in the job
+        plan, where assembly draws it onto every exported image."""
+        client = make_client(tmp_path)
+        start_flow(client)
+        page = client.get("/options")
+        assert 'name="overlay_text"' in page.text
+        resp = client.post(
+            "/options",
+            data={
+                "platform_id": "instagram",
+                "format_id": "instagram_carousel",
+                "audio": "on",
+                "visual": "images",
+                "overlay_text": "Hook line 標題",
+                "dry_run": "on",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        job_id = resp.headers["location"].rsplit("/", 1)[1]
+        plan = read_job_plan(tmp_path / "projects" / "demo", job_id)
+        assert plan is not None
+        assert plan.overlay_text == "Hook line 標題"
+
+    def test_blank_overlay_text_is_recorded_as_none(self, tmp_path):
+        client = make_client(tmp_path)
+        start_flow(client)
+        resp = client.post(
+            "/options",
+            data={
+                "platform_id": "instagram",
+                "format_id": "instagram_carousel",
+                "audio": "on",
+                "visual": "images",
+                "overlay_text": "   ",
+                "dry_run": "on",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        job_id = resp.headers["location"].rsplit("/", 1)[1]
+        plan = read_job_plan(tmp_path / "projects" / "demo", job_id)
+        assert plan is not None
+        assert plan.overlay_text is None
 
 
 # --- step 4: confirm + generate ------------------------------------------------

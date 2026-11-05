@@ -342,6 +342,7 @@ async def submit_options(request: Request):
         fps=DEFAULT_FPS,
         min_images=format_spec.min_images,
         max_images=format_spec.max_images,
+        overlay_text=options.overlay_text,
     )
     flow.options = options
     flow.job_id = job.id
@@ -374,6 +375,7 @@ def _render_options(
             "preset_id": options.preset_id,
             "selected_preset": selected_preset,
             "style": options.style,
+            "overlay_text": options.overlay_text,
             "audio": options.audio,
             "voice": options.voice,
             "pace": options.pace,
@@ -437,6 +439,7 @@ def _parse_options(form: FormData) -> tuple[FlowOptions, list[str]]:
         audio=checked("audio"),
         visual=str(form.get("visual") or "none"),
         style=str(form.get("style") or "").strip() or None,
+        overlay_text=str(form.get("overlay_text") or "").strip() or None,
         voice=str(form.get("voice") or "").strip() or None,
         tone=str(form.get("tone") or "").strip() or None,
         pace=pace,

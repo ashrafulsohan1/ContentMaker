@@ -885,6 +885,60 @@ class TestAssembleJob:
         assert items[0].media_type == "video/mp4" and items[0].kind == "video"
         assert items[0].size_bytes > 0
 
+    def test_rerun_on_same_format_replaces_superseded_beat_files(self, tmp_path: Path):
+        """A shorter re-run on the same format replaces the format's file set.
+
+        Two jobs for the same format replace its files (regeneration semantics,
+        module docstring): the earlier run's higher-numbered beat files must be
+        removed, or the deliverables listing — and with it the export ZIP —
+        bundles them into the new job's set (e.g. a 5-slide set survives a
+        3-slide re-run)."""
+        root = _project(tmp_path)
+
+        def beats(n: int) -> list[Asset]:
+            assets = []
+            for index in range(1, n + 1):
+                path = _png(root / "visuals" / f"beat_{index:02d}.png", 320, 180)
+                assets.append(
+                    _asset(
+                        index,
+                        "image",
+                        index,
+                        path,
+                        params={"prompt": f"beat {index}", "width": 320, "height": 180},
+                    )
+                )
+            return assets
+
+        plan = {
+            "platform_id": "x",
+            "format_id": "x_multi_image",
+            "kind": "carousel",
+            "width": 320,
+            "height": 180,
+            "container": "jpg",
+            "fps": 30,
+        }
+        write_job_plan(root, job_id="job_long", **plan)
+        assemble_job(root, _job("job_long", root.name, beats(3)))
+        assert (root / "output" / "x_multi_image_beat_03.jpg").is_file()  # setup sanity
+
+        write_job_plan(root, job_id="job_short", **plan)
+        result = assemble_job(root, _job("job_short", root.name, beats(2)))
+        assert [p.name for p in result.deliverables] == [
+            "x_multi_image_beat_01.jpg",
+            "x_multi_image_beat_02.jpg",
+        ]
+        assert sorted(p.name for p in (root / "output").iterdir()) == [
+            "x_multi_image_beat_01.jpg",
+            "x_multi_image_beat_02.jpg",
+        ]
+        listing = _job("job_short", root.name, [])
+        assert [d.name for d in list_deliverables(root, listing)] == [
+            "x_multi_image_beat_01.jpg",
+            "x_multi_image_beat_02.jpg",
+        ]
+
 
 # --- engine assembly hook ------------------------------------------------------------
 # Engine-direct (no plan file): exercises the fallback path end to end.
