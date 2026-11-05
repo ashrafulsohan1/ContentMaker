@@ -127,6 +127,30 @@ class TestSettingsPage:
         resp = client.post("/settings/keys/gemini/test", follow_redirects=True)
         assert "Google rejected this key (401) — it is invalid." in resp.text
 
+    def test_plain_form_failure_renders_the_red_error_banner(self, tmp_path: Path):
+        """No-JS fallback (review m2-f2): a failed action must redirect with
+        ?error= so the page renders the red .error styling — an error shown
+        in the green .notice banner reads as a success confirmation."""
+        client = make_client(
+            tmp_path,
+            probe=lambda pid, key: catalog.KeyTestResult(
+                ok=False, message="Google rejected this key (401) — it is invalid."
+            ),
+        )
+        client.post("/settings/keys/gemini", data={"api_key": KEY})
+        resp = client.post("/settings/keys/gemini/test", follow_redirects=True)
+        assert (
+            '<div class="error">Key test: Google rejected this key (401) — it is invalid.</div>'
+            in resp.text
+        )
+        assert '<div class="notice">Key test: Google rejected this key' not in resp.text
+
+    def test_plain_form_success_still_renders_the_notice_banner(self, tmp_path: Path):
+        client = make_client(tmp_path)
+        resp = client.post("/settings/keys/gemini", data={"api_key": KEY}, follow_redirects=True)
+        assert '<div class="notice">' in resp.text
+        assert '<div class="error">' not in resp.text
+
     def test_test_without_a_saved_key_asks_for_one_first(self, tmp_path: Path):
         resp = make_client(tmp_path).post("/settings/keys/gemini/test", follow_redirects=True)
         assert "add one first" in resp.text

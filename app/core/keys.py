@@ -205,6 +205,13 @@ class KeyStore:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._path.with_name(self._path.name + ".tmp")
             tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            try:
+                # before the swap (review m2-f4): chmodding only the final
+                # path leaves a window where keys.json briefly carries the
+                # default umask permissions on POSIX.
+                os.chmod(tmp, 0o600)
+            except OSError:
+                pass  # advisory where the OS does not honor it (Windows)
             _replace_with_retry(tmp, self._path)
         except OSError as exc:
             raise KeyStoreError(f"could not write the key store at {self._path}: {exc}") from exc

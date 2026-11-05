@@ -21,6 +21,7 @@ Pinned here:
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -265,3 +266,29 @@ def test_file_is_chmodded_owner_only_where_the_os_allows(tmp_path: Path):
     store.set_key("gemini", "k" * 20)
     mode = (tmp_path / KEYS_FILENAME).stat().st_mode & 0o777
     assert mode == 0o600
+
+
+def test_tmp_file_is_chmodded_owner_only_before_it_swaps_in(tmp_path: Path, monkeypatch):
+    """Review m2-f4: the 0600 chmod must hit the .tmp file *before* os.replace.
+    Chmodding only the final path leaves a window during every save in which
+    keys.json (and the .tmp) carry default umask permissions on POSIX."""
+    events: list[str] = []
+    real_replace = os.replace
+
+    def fake_chmod(path: object, mode: int) -> None:
+        events.append(f"chmod:{Path(str(path)).name}:{mode:o}")
+
+    def fake_replace(src: object, dst: object) -> None:
+        events.append(f"replace:{Path(str(src)).name}->{Path(str(dst)).name}")
+        real_replace(src, dst)
+
+    monkeypatch.setattr("app.core.keys.os.chmod", fake_chmod)
+    monkeypatch.setattr("app.core.keys.os.replace", fake_replace)
+
+    make_store(tmp_path).set_key("gemini", "k" * 20)
+
+    tmp_chmods = [i for i, e in enumerate(events) if e == f"chmod:{KEYS_FILENAME}.tmp:600"]
+    swaps = [i for i, e in enumerate(events) if e.startswith("replace:")]
+    assert tmp_chmods, f"the .tmp file is never chmodded 0600 — events: {events}"
+    assert swaps, f"the store was never swapped in — events: {events}"
+    assert tmp_chmods[0] < swaps[0], f"the chmod must precede the swap — events: {events}"

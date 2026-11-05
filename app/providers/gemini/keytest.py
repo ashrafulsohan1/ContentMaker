@@ -35,7 +35,10 @@ def test_key(
     try:
         with httpx.Client(transport=transport, timeout=timeout_s) as client:
             response = client.get(BASE_URL + PROBE_PATH, headers=headers)
-    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+    except httpx.TransportError as exc:  # connect/read/write/protocol + timeouts
+        # Broad on purpose (review m2-f1): any transport failure — including
+        # mid-response ReadError/RemoteProtocolError — must map to this
+        # module's retryable result, matching client.py's catch.
         return KeyTestResult(
             ok=False,
             message=f"Could not reach Google's API ({exc.__class__.__name__}) —"

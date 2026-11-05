@@ -191,6 +191,30 @@ def test_probe_timeout_is_retryable():
     assert result.retryable is True
 
 
+@pytest.mark.parametrize(
+    "exc",
+    [
+        httpx.ReadError("connection reset by peer"),
+        httpx.RemoteProtocolError("peer closed connection mid-response"),
+        httpx.WriteError("broken pipe"),
+    ],
+    ids=lambda exc: exc.__class__.__name__,
+)
+def test_probe_any_transport_failure_is_retryable(exc):
+    """Every httpx transport failure — not just ConnectError/timeout (review
+    m2-f1) — must map to the probe's own retryable 'could not reach' result:
+    a mid-response connection reset on the Settings 'Test key' button must
+    never escape as an unhandled exception (HTTP 500)."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise exc
+
+    _, result = run_probe(handler)
+    assert result.ok is False
+    assert result.retryable is True
+    assert "reach" in result.message.lower()
+    assert KEY not in result.message
+
+
 def test_probe_unexpected_status_is_reported_plainly():
     _, result = run_probe(lambda request: httpx.Response(418, json={}))
     assert result.ok is False

@@ -57,7 +57,10 @@ def _response(
     test_result: KeyTestResult | None = None,
     test_provider: str | None = None,
 ) -> HTMLResponse | RedirectResponse:
-    """htmx gets the updated fragment; plain forms redirect back to /settings."""
+    """htmx gets the updated fragment; plain forms redirect back to /settings
+    with the outcome as ?notice= or ?error= — the query param carries which
+    banner to render, so no-JS users see failures in the red .error styling
+    too (review m2-f2), not as a green success confirmation."""
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse(
             request,
@@ -70,8 +73,9 @@ def _response(
                 test_provider=test_provider,
             ),
         )
+    param = "notice" if notice else "error"
     message = notice or error
-    url = "/settings" + (f"?notice={quote(message)}" if message else "")
+    url = "/settings" + (f"?{param}={quote(message)}" if message else "")
     return RedirectResponse(url, status_code=303)
 
 

@@ -335,6 +335,29 @@ def test_audio_chunks_arrive_concatenated_in_order(tmp_path: Path):
     assert result.file == out_path
 
 
+def test_multiple_complete_wav_blocks_fail_loud_instead_of_splicing(tmp_path: Path):
+    """Review m2-f5: joining audio blocks is only correct for raw chunked
+    delivery. Two self-contained RIFF/WAVE files spliced into one byte string
+    probe as a single short clip, and the truncated duration would silently
+    enter the timing manifest — so a response like that must fail loud."""
+    steps = [
+        {
+            "type": "model_output",
+            "content": [
+                {"type": "audio", "mime_type": "audio/wav", "data": wav_b64(WAV_BYTES)},
+                {"type": "audio", "mime_type": "audio/wav", "data": wav_b64(WAV_BYTES + b"tail")},
+            ],
+        }
+    ]
+    out_path = tmp_path / "beat.wav"
+    with pytest.raises(GeminiError, match="RIFF"):
+        generate_with(
+            lambda request: httpx.Response(200, json=interaction_response("", steps=steps)),
+            request=make_request(out_path=out_path),
+        )
+    assert not out_path.exists()  # no corrupt file was ever written
+
+
 def test_uri_delivered_audio_is_downloaded_without_credentials():
     """Delivery by URI must download via the client — which attaches the key
     only to the Gemini API host, never to a third-party file host (§6.5)."""

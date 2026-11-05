@@ -152,9 +152,14 @@ class GeminiTTSProvider:
     def _extract_audio(self, interaction: dict[str, Any]) -> bytes:
         """Walk the REST envelope (spike §1.1): ``steps[]`` entries of type
         ``model_output`` carry ``content[]`` audio blocks. Inline blocks
-        arrive base64 in ``data`` (decoded and concatenated in order);
-        URI-delivered blocks are downloaded via the client, which attaches
-        the key to the Gemini API host only (§6.5)."""
+        arrive base64 in ``data``; URI-delivered blocks are downloaded via
+        the client, which attaches the key to the Gemini API host only (§6.5).
+
+        Raw chunks — one file's bytes split across blocks (chunked delivery)
+        — concatenate in order. Blocks that each carry their own RIFF header
+        are separate WAV files and are refused, not spliced: joining them
+        would write one corrupt file whose probed duration is only the first
+        chunk's (review m2-f5)."""
         chunks: list[bytes] = []
         for step in _as_list(interaction.get("steps")):
             if not isinstance(step, dict) or step.get("type") != "model_output":
@@ -175,6 +180,18 @@ class GeminiTTSProvider:
                 " (no audio block under steps[].content) — nothing was written;"
                 " regenerate the asset. If this keeps happening, the model"
                 " response shape may have drifted (research/gemini-api.md §1.1).",
+                retryable=False,
+            )
+        riff_files = sum(1 for chunk in chunks if chunk[:4] == b"RIFF")
+        if riff_files > 1:
+            raise GeminiError(
+                f"Gemini returned {len(chunks)} audio blocks, {riff_files} of"
+                " them self-contained WAV files (each carrying its own RIFF"
+                " header). Splicing those bytes would write one corrupt file"
+                " whose probed duration is only the first chunk's, so nothing"
+                " was written; regenerate the asset. If this keeps happening,"
+                " the model response shape may have drifted"
+                " (research/gemini-api.md §1.1).",
                 retryable=False,
             )
         return b"".join(chunks)
