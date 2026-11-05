@@ -20,6 +20,7 @@ Canonical, dated decision history. PROMPT.md is the spec of record; resolved dec
 
 | D11 | 2026-11-05 | **Operating rules (user-mandated):** (1) task granularity — as many tasks as needed, none so small they don't make sense alone; (2) loop discipline — ≤10 loops per task unless mandatory, validate each loop's necessity before running it; (3) context economy — after a first pass, prefer compact/handoff over re-sending the whole session, reasoning compact-vs-full each time; durable on-disk state (DECISIONS/PROJECT_LOG/ledger) makes compaction safe | User message 2026-11-05 |
 | D12 | 2026-11-05 | **Single-agent rule: no spawned subagents** for this project (user works other projects concurrently). Workflow runs are parked, not deleted: `dwfrun-98de313d-2572-4559-acd6-0be1a550924b` stopped at the M1 review step on quota; resume **only** if the user reverses this rule. Build continues inline (executing-plans style) by the one session agent; reviews become disclosed self-reviews until subagents are allowed again | User message 2026-11-05 |
+| D12-r | 2026-11-05 | **D12 lifted by user** with the mandate: never resume inline — the build resumes **only via the dynamic workflow**. Executed as AmendWorkflow on the parked run (imports ~55M-token cache) with D11 token-economy rules added to worker/reviewer personas; the parked M1 reviewer restarts fresh | User message 2026-11-05 |
 
 ## Token-consumption analysis (2026-11-05, recorded per user request)
 
