@@ -350,9 +350,15 @@ class TestSseEndpoint:
             assert first[0][1]["status"] == "running"
             assert first[0][1]["assets"][0]["status"] == "generating"
             tts.unblock()  # asset 1 finishes, image finishes, tts beat 2 gates
+            # record_spend lands just before the status="done" write (core.jobs
+            # _process_asset), so a spend/updated_at-only update with done == 0
+            # can precede the completion update — wait for the update that
+            # actually reflects the finished asset, not the first update seen.
             events = stream.require(
-                lambda evs: bool(evs) and evs[-1][0] == "update",
-                message="no update event after the first asset finished",
+                lambda evs: any(
+                    ev[0] == "update" and ev[1]["progress"]["done"] >= 1 for ev in evs
+                ),
+                message="no update event showing the first asset done",
             )
             assert events[-1][1]["progress"]["done"] >= 1
             tts.unblock()  # the rest completes
