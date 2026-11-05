@@ -7,7 +7,13 @@
       "image": "usd_per_image — price per generated image",
       "video": "usd_per_second — price per second of clip; estimates ceil fractional seconds up"
     },
-    "warning": "Providers flagged verified:false carry ballpark placeholders from BUILD_PLAN §0. The M2 research spike (task 2.0) must re-verify model IDs and prices before any real provider is wired or any paid call is made."
+    "warning": "Research spike 2.0 (2026-11-06) verified the model IDs and prices below against Google's official docs — see research/gemini-api.md for every derivation and citation. The gemini 'verified' flag is intentionally left false here because tests/test_cost.py:131 still asserts a non-mock placeholder must exist; flip it to true (and relax that assertion) when wiring the real provider (tasks 2.1/2.2).",
+    "recheck": [
+      "2026-12-01: Gemini 2.5 family auto-routing begins; 2.5 TTS deprecation flow — do not add 2.5 models back.",
+      "2027-01-01: gemini-3.8-flash-tts / flash-lite-tts audio prices double ($9->$18, $6->$12 per 1M audio tokens) — re-derive tts price.",
+      "TTS billing is per OUTPUT audio token (25 tokens/s); the per-1k-chars figure assumes English at 120 wpm (11.4 chars/s, conservative vs ~150 wpm mid-rate). ffprobe durations at task 2.4 reconcile actual spend.",
+      "video price covers 720p (5,792 output tokens/s x $17.50/1M = $0.10136/s); 1080p/4K billing is not documented on the pricing page — verify at task 4.1."
+    ]
   },
   "providers": {
     "mock": {
@@ -22,10 +28,26 @@
     "gemini": {
       "label": "Google Gemini API (AI Studio key) — BUILD_PLAN §0 recommendation",
       "verified": false,
+      "note": "Prices and model IDs verified 2026-11-06 by research spike 2.0 (research/gemini-api.md); flag stays false only because test_cost.py:131 requires a non-mock placeholder until the lead flips it. TTS has a free tier; image and video require a paid (billing-enabled) project — fresh keys sit in Tier 1 with a $10-per-10-min Google-side spend limiter, so expect 429s below the app's own cap.",
       "engines": {
-        "tts": { "model": "gemini-2.5-flash-preview-tts", "unit": "usd_per_1k_chars", "price": 0.03 },
-        "image": { "model": "gemini-2.5-flash-image", "unit": "usd_per_image", "price": 0.10 },
-        "video": { "model": "veo-3.1-fast-generate-preview", "unit": "usd_per_second", "price": 0.30 }
+        "tts": {
+          "model": "gemini-3.8-flash-tts",
+          "unit": "usd_per_1k_chars",
+          "price": 0.02,
+          "note": "Billed per output audio token (25 tokens/s, $9.00/1M through 2026-12-31, $18.00 from 2027-01-01; free tier exists). $0.02/1k chars = conservative 120 wpm English (~2,193 audio tokens per 1k chars; mid-rate 150 wpm gives ~$0.016). Cheaper alternative: gemini-3.8-flash-lite-tts ($6.00/1M audio => ~0.014 conservative, $0.0015 per 10s). Legacy gemini-2.5-flash-preview-tts still listed but deprecated — do not use."
+        },
+        "image": {
+          "model": "gemini-nano-banana-2.1",
+          "unit": "usd_per_image",
+          "price": 0.0504,
+          "note": "Page-stated 2K equivalent ($30.00/1M image tokens x 1,680 tokens); 2K chosen because platforms.json targets 1080px-class dims that 1K cannot cover (9:16@1K is 768x1376) — generate 2K, downscale in assembly. 1K = $0.0336, 4K = $0.113. Alternatives: gemini-3.1-flash-lite-image 1K-only $0.0336; gemini-3.1-flash-image $0.067 (1K)–$0.151 (4K); gemini-3-pro-image $0.134–$0.24. Paid only (no free tier). Imagen shut down; gemini-2.5-flash-image deprecated, shuts down 2027-03-15."
+        },
+        "video": {
+          "model": "gemini-omni-1.1-flash",
+          "unit": "usd_per_second",
+          "price": 0.102,
+          "note": "Standard tier: $17.50/1M output video tokens at 5,792 tokens per second of 720p video = $0.10136/s (pricing page: 'approximately $0.10 per second'), rounded up; input tokens $1.50/1M are negligible per clip. Paid only. Veo 3.1 Preview (the old prices.json entry) was shut down 2026-10-22 — Gemini Omni Flash is its replacement. Base clip duration and 1080p/4K billing not documented; verify at task 4.1."
+        }
       }
     }
   }
