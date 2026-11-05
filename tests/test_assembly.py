@@ -9,18 +9,20 @@
   ``AssemblyError``.
 - ``assembly.images.export_image`` — platform-correct PNG/JPEG export: scale +
   pad to exact platform dims, container honored (jpg → mjpeg, png → png);
-  optional text overlay via ffmpeg drawtext (the mock-label ruling from 1.4),
+  optional text overlay via ffmpeg drawtext (the 3.2 ruling, DECISIONS D13),
   loud error when a font is required but none exists.
 - ``assembly.pipeline`` — job → deliverables orchestration: probed audio
   durations → timing manifest written to ``plan/<job>_manifest.json`` (§6.2/§7),
-  video format → one MP4 per format, image/carousel → one export per beat,
-  partial jobs assemble only completed beats, no-plan jobs fall back to asset
-  params, nothing-to-assemble fails loudly.
+  video format → one MP4 per format, image/carousel → one export per beat with
+  the plan's optional per-image overlay text (§6.4; video ignores it — captions
+  are out of scope §9), partial jobs assemble only completed beats, no-plan
+  jobs fall back to asset params, nothing-to-assemble fails loudly.
 - engine assembly hook — runs before finalize (deliverables exist when the job
   turns terminal), an assembly failure marks the job ``failed``, and
   ``JobEngine.assemble`` re-runs it without touching asset state (the
   regenerate-without-redoing path, §6.6/§8).
 """
+
 from __future__ import annotations
 
 import wave
@@ -64,16 +66,16 @@ def _silent_wav(path: Path, seconds: float, rate: int = 8000) -> None:
 
 def _png(path: Path, width: int = 64, height: int = 64, seed: int = 7) -> Path:
     MockImageProvider().generate(
-        ImageRequest(prompt="p", style_hint=None, seed=seed, width=width, height=height,
-                     out_path=path)
+        ImageRequest(
+            prompt="p", style_hint=None, seed=seed, width=width, height=height, out_path=path
+        )
     )
     return path
 
 
 def _clip(path: Path, seconds: float, width: int = 160, height: int = 120) -> Path:
     MockVideoProvider().generate(
-        VideoRequest(prompt="clip", duration_s=seconds, width=width, height=height,
-                     out_path=path)
+        VideoRequest(prompt="clip", duration_s=seconds, width=width, height=height, out_path=path)
     )
     return path
 
@@ -84,16 +86,31 @@ def _project(tmp_path: Path, name: str = "demo") -> Path:
 
 def _job(job_id: str, project: str, assets: list[Asset], status: str = "running") -> Job:
     return Job(
-        id=job_id, project=project, status=status, created_at="t", updated_at="t",
+        id=job_id,
+        project=project,
+        status=status,
+        created_at="t",
+        updated_at="t",
         assets=tuple(assets),
     )
 
 
-def _asset(asset_id: int, kind: str, beat: int, out_path: Path, status: str = "done",
-           params: dict | None = None) -> Asset:
+def _asset(
+    asset_id: int,
+    kind: str,
+    beat: int,
+    out_path: Path,
+    status: str = "done",
+    params: dict | None = None,
+) -> Asset:
     return Asset(
-        id=asset_id, job_id="job_x", kind=kind, beat_index=beat, params=params or {},
-        out_path=out_path, status=status,
+        id=asset_id,
+        job_id="job_x",
+        kind=kind,
+        beat_index=beat,
+        params=params or {},
+        out_path=out_path,
+        status=status,
     )
 
 
@@ -125,8 +142,9 @@ class TestStitchVideo:
             2: BeatVisual(2, _png(tmp_path / "v2.png"), "image"),
         }
         out = tmp_path / "out" / "demo.mp4"
-        stitch_video(manifest, visuals, project_root=root, out_path=out,
-                     target_width=320, target_height=180)
+        stitch_video(
+            manifest, visuals, project_root=root, out_path=out, target_width=320, target_height=180
+        )
         video, audio, duration = _probe_streams(FFmpeg(), out)
         assert video["codec_name"] == "h264"
         assert audio["codec_name"] == "aac"
@@ -146,8 +164,9 @@ class TestStitchVideo:
         assert manifest.total_duration_s == pytest.approx(9.0)  # 3 × silent default
         visuals = {i: BeatVisual(i, _png(tmp_path / f"v{i}.png"), "image") for i in (1, 2, 3)}
         out = tmp_path / "out.mp4"
-        stitch_video(manifest, visuals, project_root=root, out_path=out,
-                     target_width=320, target_height=180)
+        stitch_video(
+            manifest, visuals, project_root=root, out_path=out, target_width=320, target_height=180
+        )
         _, _, duration = _probe_streams(FFmpeg(), out)
         assert duration == pytest.approx(9.0, abs=3 / 30 + MS)
 
@@ -166,8 +185,9 @@ class TestStitchVideo:
             2: BeatVisual(2, _clip(tmp_path / "clip.mp4", 0.5), "video"),
         }
         out = tmp_path / "out.mp4"
-        stitch_video(manifest, visuals, project_root=root, out_path=out,
-                     target_width=320, target_height=180)
+        stitch_video(
+            manifest, visuals, project_root=root, out_path=out, target_width=320, target_height=180
+        )
         video, _, duration = _probe_streams(FFmpeg(), out)
         assert (video["width"], video["height"]) == (320, 180)
         assert video["r_frame_rate"] == "30/1"
@@ -177,8 +197,14 @@ class TestStitchVideo:
         manifest = build_manifest("job_x", [BeatSpec(text="only")])  # 3.0s
         visuals = {1: BeatVisual(1, _clip(tmp_path / "short.mp4", 0.5), "video")}
         out = tmp_path / "out.mp4"
-        stitch_video(manifest, visuals, project_root=tmp_path, out_path=out,
-                     target_width=320, target_height=180)
+        stitch_video(
+            manifest,
+            visuals,
+            project_root=tmp_path,
+            out_path=out,
+            target_width=320,
+            target_height=180,
+        )
         _, _, duration = _probe_streams(FFmpeg(), out)
         assert duration == pytest.approx(3.0, abs=1 / 30 + MS)
 
@@ -191,43 +217,67 @@ class TestStitchVideo:
         )
         visuals = {1: BeatVisual(1, _png(tmp_path / "v.png"), "image")}
         out = tmp_path / "out.mp4"
-        stitch_video(manifest, visuals, project_root=root, out_path=out,
-                     target_width=320, target_height=180)
+        stitch_video(
+            manifest, visuals, project_root=root, out_path=out, target_width=320, target_height=180
+        )
         _, _, duration = _probe_streams(FFmpeg(), out)
         assert duration == pytest.approx(1.0, abs=1 / 30 + MS)
 
     def test_missing_visual_raises_assembly_error(self, tmp_path: Path):
         manifest = build_manifest("job_x", [BeatSpec(text="a"), BeatSpec(text="b")])
         with pytest.raises(AssemblyError, match="beat 2"):
-            stitch_video(manifest, {1: BeatVisual(1, _png(tmp_path / "v.png"), "image")},
-                         project_root=tmp_path, out_path=tmp_path / "o.mp4",
-                         target_width=64, target_height=64)
+            stitch_video(
+                manifest,
+                {1: BeatVisual(1, _png(tmp_path / "v.png"), "image")},
+                project_root=tmp_path,
+                out_path=tmp_path / "o.mp4",
+                target_width=64,
+                target_height=64,
+            )
 
     def test_missing_audio_file_raises_assembly_error(self, tmp_path: Path):
         manifest = build_manifest(
             "job_x", [BeatSpec(text="a", audio_file="audio/gone.wav", duration_s=1.0)]
         )
         with pytest.raises(AssemblyError, match="gone.wav"):
-            stitch_video(manifest, {1: BeatVisual(1, _png(tmp_path / "v.png"), "image")},
-                         project_root=tmp_path, out_path=tmp_path / "o.mp4",
-                         target_width=64, target_height=64)
+            stitch_video(
+                manifest,
+                {1: BeatVisual(1, _png(tmp_path / "v.png"), "image")},
+                project_root=tmp_path,
+                out_path=tmp_path / "o.mp4",
+                target_width=64,
+                target_height=64,
+            )
 
     def test_survives_spaces_and_unicode_paths(self, tmp_path: Path):
         out_dir = tmp_path / "final output" / "映像 出力"
         manifest = build_manifest("job_x", [BeatSpec(text="one")])
-        out = stitch_video(manifest, {1: BeatVisual(1, _png(tmp_path / "v.png"), "image")},
-                           project_root=tmp_path, out_path=out_dir / "成片 final.mp4",
-                           target_width=320, target_height=180)
+        out = stitch_video(
+            manifest,
+            {1: BeatVisual(1, _png(tmp_path / "v.png"), "image")},
+            project_root=tmp_path,
+            out_path=out_dir / "成片 final.mp4",
+            target_width=320,
+            target_height=180,
+        )
         assert out.is_file() and out.stat().st_size > 0
 
     def test_scratch_intermediates_are_cleaned(self, tmp_path: Path):
         scratch = tmp_path / "state" / "scratch" / "job_x"
         manifest = build_manifest("job_x", [BeatSpec(text="a"), BeatSpec(text="b")])
-        visuals = {1: BeatVisual(1, _png(tmp_path / "v1.png"), "image"),
-                   2: BeatVisual(2, _png(tmp_path / "v2.png"), "image")}
-        stitch_video(manifest, visuals, project_root=tmp_path,
-                     out_path=tmp_path / "out.mp4", target_width=64, target_height=64,
-                     scratch_dir=scratch)
+        visuals = {
+            1: BeatVisual(1, _png(tmp_path / "v1.png"), "image"),
+            2: BeatVisual(2, _png(tmp_path / "v2.png"), "image"),
+        }
+        stitch_video(
+            manifest,
+            visuals,
+            project_root=tmp_path,
+            out_path=tmp_path / "out.mp4",
+            target_width=64,
+            target_height=64,
+            scratch_dir=scratch,
+        )
         assert not scratch.exists() or not any(scratch.iterdir())
 
     def test_duration_deviation_beyond_frame_slack_fails(self, tmp_path: Path):
@@ -244,9 +294,15 @@ class TestStitchVideo:
 
         manifest = build_manifest("job_x", [BeatSpec(text="a")])
         with pytest.raises(AssemblyError, match="manifest"):
-            stitch_video(manifest, {1: BeatVisual(1, _png(tmp_path / "v.png"), "image")},
-                         project_root=tmp_path, out_path=tmp_path / "o.mp4",
-                         target_width=64, target_height=64, ffmpeg=LyingProbe())  # type: ignore[arg-type]
+            stitch_video(
+                manifest,
+                {1: BeatVisual(1, _png(tmp_path / "v.png"), "image")},
+                project_root=tmp_path,
+                out_path=tmp_path / "o.mp4",
+                target_width=64,
+                target_height=64,
+                ffmpeg=LyingProbe(),
+            )  # type: ignore[arg-type]
 
     def test_failed_encode_surfaces_as_assembly_error(self, tmp_path: Path):
         from app.assembly.ffmpeg import FFmpegError
@@ -255,18 +311,24 @@ class TestStitchVideo:
             """Duck-typed FFmpeg whose every encode fails like the wrapper does."""
 
             def run(self, args):
-                raise FFmpegError("ffmpeg failed (exit 1): bad filter", returncode=1,
-                                  stderr_tail="bad filter")
+                raise FFmpegError(
+                    "ffmpeg failed (exit 1): bad filter", returncode=1, stderr_tail="bad filter"
+                )
 
             def probe_duration(self, path):
                 return 0.0
 
         manifest = build_manifest("job_x", [BeatSpec(text="a")])
         with pytest.raises(AssemblyError, match="segment encode failed"):
-            stitch_video(manifest, {1: BeatVisual(1, _png(tmp_path / "v.png"), "image")},
-                         project_root=tmp_path, out_path=tmp_path / "o.mp4",
-                         target_width=64, target_height=64,
-                         ffmpeg=FailingEncoder())  # type: ignore[arg-type]
+            stitch_video(
+                manifest,
+                {1: BeatVisual(1, _png(tmp_path / "v.png"), "image")},
+                project_root=tmp_path,
+                out_path=tmp_path / "o.mp4",
+                target_width=64,
+                target_height=64,
+                ffmpeg=FailingEncoder(),
+            )  # type: ignore[arg-type]
 
 
 # --- assembly.images.export_image -------------------------------------------------
@@ -275,24 +337,27 @@ class TestStitchVideo:
 class TestExportImage:
     def test_exports_platform_jpeg(self, tmp_path: Path):
         out = tmp_path / "out" / "pin_beat_01.jpg"
-        export_image(_png(tmp_path / "src.png", 64, 64), out, width=1000, height=1500,
-                     container="jpg")
+        export_image(
+            _png(tmp_path / "src.png", 64, 64), out, width=1000, height=1500, container="jpg"
+        )
         video, _, _ = _probe_streams(FFmpeg(), out)
         assert video["codec_name"] == "mjpeg"
         assert (video["width"], video["height"]) == (1000, 1500)
 
     def test_exports_png_container(self, tmp_path: Path):
         out = tmp_path / "out" / "beat_01.png"
-        export_image(_png(tmp_path / "src.jpg", 64, 64), out, width=640, height=360,
-                     container="png")
+        export_image(
+            _png(tmp_path / "src.jpg", 64, 64), out, width=640, height=360, container="png"
+        )
         video, _, _ = _probe_streams(FFmpeg(), out)
         assert video["codec_name"] == "png"
         assert (video["width"], video["height"]) == (640, 360)
 
     def test_unknown_container_raises(self, tmp_path: Path):
         with pytest.raises(AssemblyError, match="container"):
-            export_image(_png(tmp_path / "src.png"), tmp_path / "o.gif", width=64,
-                         height=64, container="gif")
+            export_image(
+                _png(tmp_path / "src.png"), tmp_path / "o.gif", width=64, height=64, container="gif"
+            )
 
     @pytest.mark.skipif(find_font() is None, reason="no system font for drawtext")
     def test_text_overlay_changes_the_image(self, tmp_path: Path):
@@ -300,8 +365,9 @@ class TestExportImage:
         plain = tmp_path / "plain.jpg"
         labeled = tmp_path / "labeled.jpg"
         export_image(src, plain, width=1000, height=1500, container="jpg")
-        export_image(src, labeled, width=1000, height=1500, container="jpg",
-                     overlay_text="Hook line 標題")
+        export_image(
+            src, labeled, width=1000, height=1500, container="jpg", overlay_text="Hook line 標題"
+        )
         assert labeled.stat().st_size != plain.stat().st_size
         video, _, _ = _probe_streams(FFmpeg(), labeled)
         assert (video["width"], video["height"]) == (1000, 1500)
@@ -309,8 +375,14 @@ class TestExportImage:
     def test_overlay_without_font_raises_loudly(self, tmp_path: Path, monkeypatch):
         monkeypatch.setattr("app.assembly.images.find_font", lambda: None)
         with pytest.raises(AssemblyError, match="CONTENTMAKER_FONT"):
-            export_image(_png(tmp_path / "src.png"), tmp_path / "o.jpg", width=64,
-                         height=64, container="jpg", overlay_text="text")
+            export_image(
+                _png(tmp_path / "src.png"),
+                tmp_path / "o.jpg",
+                width=64,
+                height=64,
+                container="jpg",
+                overlay_text="text",
+            )
         assert not (tmp_path / "o.jpg").exists()
 
     def test_failed_encode_surfaces_as_assembly_error(self, tmp_path: Path):
@@ -318,12 +390,21 @@ class TestExportImage:
 
         class FailingEncoder:
             def run(self, args):
-                raise FFmpegError("ffmpeg failed (exit 1): no such codec", returncode=1,
-                                  stderr_tail="no such codec")
+                raise FFmpegError(
+                    "ffmpeg failed (exit 1): no such codec",
+                    returncode=1,
+                    stderr_tail="no such codec",
+                )
 
         with pytest.raises(AssemblyError, match="image export failed"):
-            export_image(_png(tmp_path / "src.png"), tmp_path / "o.jpg", width=64,
-                         height=64, container="jpg", ffmpeg=FailingEncoder())  # type: ignore[arg-type]
+            export_image(
+                _png(tmp_path / "src.png"),
+                tmp_path / "o.jpg",
+                width=64,
+                height=64,
+                container="jpg",
+                ffmpeg=FailingEncoder(),
+            )  # type: ignore[arg-type]
 
 
 # --- assembly.pipeline: job plan ---------------------------------------------------
@@ -332,8 +413,15 @@ class TestExportImage:
 class TestJobPlan:
     def test_write_read_roundtrip(self, tmp_path: Path):
         path = write_job_plan(
-            tmp_path, job_id="job_x", platform_id="youtube", format_id="youtube_shorts",
-            kind="video", width=1080, height=1920, container="mp4", fps=30,
+            tmp_path,
+            job_id="job_x",
+            platform_id="youtube",
+            format_id="youtube_shorts",
+            kind="video",
+            width=1080,
+            height=1920,
+            container="mp4",
+            fps=30,
         )
         assert path == tmp_path / "plan" / "job_x_plan.json"
         plan = read_job_plan(tmp_path, "job_x")
@@ -351,6 +439,48 @@ class TestJobPlan:
         with pytest.raises(AssemblyError, match="job_x"):
             read_job_plan(tmp_path, "job_x")
 
+    def test_overlay_text_roundtrips_and_defaults_to_none(self, tmp_path: Path):
+        path = write_job_plan(
+            tmp_path,
+            job_id="job_o",
+            platform_id="x",
+            format_id="x_multi_image",
+            kind="carousel",
+            width=640,
+            height=360,
+            container="jpg",
+            fps=30,
+            overlay_text="Hook line 標題",
+        )
+        plan = read_job_plan(tmp_path, "job_o")
+        assert plan is not None and plan.overlay_text == "Hook line 標題"
+        assert "Hook line 標題" in path.read_text(encoding="utf-8")
+        write_job_plan(
+            tmp_path,
+            job_id="job_plain",
+            platform_id="x",
+            format_id="x_multi_image",
+            kind="carousel",
+            width=640,
+            height=360,
+            container="jpg",
+            fps=30,
+        )
+        plain = read_job_plan(tmp_path, "job_plain")
+        assert plain is not None and plain.overlay_text is None
+
+    def test_plan_written_before_3_2_reads_without_overlay(self, tmp_path: Path):
+        """A pre-3.2 plan file (no overlay_text key) still assembles after upgrade."""
+        (tmp_path / "plan").mkdir()
+        (tmp_path / "plan" / "job_old_plan.json").write_text(
+            '{"job_id": "job_old", "platform_id": "x", "format_id": "x_multi_image",'
+            ' "kind": "carousel", "width": 640, "height": 360, "container": "jpg",'
+            ' "fps": 30}',
+            encoding="utf-8",
+        )
+        plan = read_job_plan(tmp_path, "job_old")
+        assert plan is not None and plan.overlay_text is None
+
 
 # --- assembly.pipeline: assemble_job -------------------------------------------------
 
@@ -361,16 +491,40 @@ def _video_job_fixture(root: Path, job_id: str = "job_x") -> tuple[Job, Path]:
     _silent_wav(root / "audio" / "beat_02.wav", 0.8)
     _png(root / "visuals" / "beat_01.png", 320, 180)
     _png(root / "visuals" / "beat_02.png", 320, 180)
-    job = _job(job_id, root.name, [
-        _asset(1, "tts", 1, root / "audio" / "beat_01.wav",
-               params={"text": "first beat", "voice": "v"}),
-        _asset(2, "image", 1, root / "visuals" / "beat_01.png",
-               params={"prompt": "first visual", "width": 320, "height": 180}),
-        _asset(3, "tts", 2, root / "audio" / "beat_02.wav",
-               params={"text": "second beat", "voice": "v"}),
-        _asset(4, "image", 2, root / "visuals" / "beat_02.png",
-               params={"prompt": "second visual", "width": 320, "height": 180}),
-    ])
+    job = _job(
+        job_id,
+        root.name,
+        [
+            _asset(
+                1,
+                "tts",
+                1,
+                root / "audio" / "beat_01.wav",
+                params={"text": "first beat", "voice": "v"},
+            ),
+            _asset(
+                2,
+                "image",
+                1,
+                root / "visuals" / "beat_01.png",
+                params={"prompt": "first visual", "width": 320, "height": 180},
+            ),
+            _asset(
+                3,
+                "tts",
+                2,
+                root / "audio" / "beat_02.wav",
+                params={"text": "second beat", "voice": "v"},
+            ),
+            _asset(
+                4,
+                "image",
+                2,
+                root / "visuals" / "beat_02.png",
+                params={"prompt": "second visual", "width": 320, "height": 180},
+            ),
+        ],
+    )
     return job, root
 
 
@@ -378,9 +532,17 @@ class TestAssembleJob:
     def test_video_format_produces_mp4_and_manifest(self, tmp_path: Path):
         root = _project(tmp_path)
         job, root = _video_job_fixture(root)
-        write_job_plan(root, job_id=job.id, platform_id="youtube",
-                       format_id="youtube_shorts", kind="video", width=320, height=180,
-                       container="mp4", fps=30)
+        write_job_plan(
+            root,
+            job_id=job.id,
+            platform_id="youtube",
+            format_id="youtube_shorts",
+            kind="video",
+            width=320,
+            height=180,
+            container="mp4",
+            fps=30,
+        )
         result = assemble_job(root, job)
         assert result.manifest_path == root / "plan" / f"{job.id}_manifest.json"
         manifest = read_manifest(result.manifest_path)  # §6.2 schema holds
@@ -395,12 +557,18 @@ class TestAssembleJob:
     def test_partial_job_assembles_only_completed_beats(self, tmp_path: Path):
         root = _project(tmp_path)
         job, root = _video_job_fixture(root)
-        job = _job(job.id, job.project, [
-            asset if asset.beat_index != 2 else _asset(
-                asset.id, asset.kind, 2, asset.out_path, status="failed", params=asset.params
-            )
-            for asset in job.assets
-        ])
+        job = _job(
+            job.id,
+            job.project,
+            [
+                asset
+                if asset.beat_index != 2
+                else _asset(
+                    asset.id, asset.kind, 2, asset.out_path, status="failed", params=asset.params
+                )
+                for asset in job.assets
+            ],
+        )
         result = assemble_job(root, job)
         manifest = read_manifest(result.manifest_path)
         assert [b.index for b in manifest.beats] == [1]
@@ -409,22 +577,103 @@ class TestAssembleJob:
     def test_image_format_exports_every_beat(self, tmp_path: Path):
         root = _project(tmp_path)
         job, root = _video_job_fixture(root)
-        write_job_plan(root, job_id=job.id, platform_id="x", format_id="x_multi_image",
-                       kind="carousel", width=640, height=360, container="jpg", fps=30)
+        write_job_plan(
+            root,
+            job_id=job.id,
+            platform_id="x",
+            format_id="x_multi_image",
+            kind="carousel",
+            width=640,
+            height=360,
+            container="jpg",
+            fps=30,
+        )
         result = assemble_job(root, job)
         assert [p.name for p in result.deliverables] == [
-            "x_multi_image_beat_01.jpg", "x_multi_image_beat_02.jpg"
+            "x_multi_image_beat_01.jpg",
+            "x_multi_image_beat_02.jpg",
         ]
         video, _, _ = _probe_streams(FFmpeg(), result.deliverables[0])
         assert (video["codec_name"], video["width"], video["height"]) == ("mjpeg", 640, 360)
 
+    @pytest.mark.skipif(find_font() is None, reason="no system font for drawtext")
+    def test_image_format_applies_plan_overlay_to_every_beat(self, tmp_path: Path):
+        """§6.4 optional per-image text overlay reaches each exported beat."""
+        root = _project(tmp_path)
+        job, root = _video_job_fixture(root)
+        write_job_plan(
+            root,
+            job_id=job.id,
+            platform_id="x",
+            format_id="x_multi_image",
+            kind="carousel",
+            width=640,
+            height=360,
+            container="jpg",
+            fps=30,
+            overlay_text="Hook line 標題",
+        )
+        result = assemble_job(root, job)
+        video, _, _ = _probe_streams(FFmpeg(), result.deliverables[0])
+        assert (video["width"], video["height"]) == (640, 360)  # dims stay exact
+        # Each overlaid export differs from its plain export of the same beat.
+        # A distinct format_id keeps the second run off the first run's files
+        # (same-format jobs replace each other's files by design).
+        write_job_plan(
+            root,
+            job_id="job_plain",
+            platform_id="x",
+            format_id="x_plain_image",
+            kind="carousel",
+            width=640,
+            height=360,
+            container="jpg",
+            fps=30,
+        )
+        plain = assemble_job(root, _job("job_plain", job.project, job.assets))
+        assert [p.name for p in plain.deliverables] == [
+            "x_plain_image_beat_01.jpg",
+            "x_plain_image_beat_02.jpg",
+        ]
+        for overlaid, plain_out in zip(result.deliverables, plain.deliverables, strict=True):
+            assert overlaid.read_bytes() != plain_out.read_bytes()
+
+    def test_video_format_ignores_plan_overlay(self, tmp_path: Path):
+        """Overlay is an image-export option; video stays caption-free (§9)."""
+        root = _project(tmp_path)
+        job, root = _video_job_fixture(root)
+        write_job_plan(
+            root,
+            job_id=job.id,
+            platform_id="youtube",
+            format_id="youtube_shorts",
+            kind="video",
+            width=320,
+            height=180,
+            container="mp4",
+            fps=30,
+            overlay_text="Hook line 標題",
+        )
+        result = assemble_job(root, job)
+        assert result.deliverables == (root / "output" / "youtube_shorts.mp4",)
+        assert result.deliverables[0].is_file()
+
     def test_audio_only_job_writes_manifest_without_video(self, tmp_path: Path):
         root = _project(tmp_path)
         _silent_wav(root / "audio" / "beat_01.wav", 1.5)
-        job = _job("job_a", root.name, [
-            _asset(1, "tts", 1, root / "audio" / "beat_01.wav",
-                   params={"text": "spoken", "voice": "v"})
-        ])
+        job = _job(
+            "job_a",
+            root.name,
+            [
+                _asset(
+                    1,
+                    "tts",
+                    1,
+                    root / "audio" / "beat_01.wav",
+                    params={"text": "spoken", "voice": "v"},
+                )
+            ],
+        )
         result = assemble_job(root, job)
         assert result.deliverables == ()
         manifest = read_manifest(result.manifest_path)
@@ -434,10 +683,20 @@ class TestAssembleJob:
     def test_no_done_assets_raises(self, tmp_path: Path):
         root = _project(tmp_path)
         _png(root / "visuals" / "beat_01.png", 32, 32)
-        job = _job("job_f", root.name, [
-            _asset(1, "image", 1, root / "visuals" / "beat_01.png", status="failed",
-                   params={"prompt": "p"})
-        ])
+        job = _job(
+            "job_f",
+            root.name,
+            [
+                _asset(
+                    1,
+                    "image",
+                    1,
+                    root / "visuals" / "beat_01.png",
+                    status="failed",
+                    params={"prompt": "p"},
+                )
+            ],
+        )
         with pytest.raises(AssemblyError, match="no completed assets"):
             assemble_job(root, job)
 
@@ -452,10 +711,19 @@ class TestAssembleJob:
     def test_visual_beat_without_audio_gets_silent_default(self, tmp_path: Path):
         root = _project(tmp_path)
         _png(root / "visuals" / "beat_01.png", 320, 180)
-        job = _job("job_s", root.name, [
-            _asset(1, "image", 1, root / "visuals" / "beat_01.png",
-                   params={"prompt": "still", "width": 320, "height": 180})
-        ])
+        job = _job(
+            "job_s",
+            root.name,
+            [
+                _asset(
+                    1,
+                    "image",
+                    1,
+                    root / "visuals" / "beat_01.png",
+                    params={"prompt": "still", "width": 320, "height": 180},
+                )
+            ],
+        )
         result = assemble_job(root, job)
         manifest = read_manifest(result.manifest_path)
         assert manifest.beats[0].duration_s == DEFAULT_SILENT_BEAT_DURATION_S
@@ -464,21 +732,43 @@ class TestAssembleJob:
     def test_asset_marked_done_but_file_missing_raises(self, tmp_path: Path):
         root = _project(tmp_path)
         _png(root / "visuals" / "beat_01.png", 320, 180)
-        job = _job("job_m", root.name, [
-            _asset(1, "tts", 1, root / "audio" / "gone.wav",  # never written
-                   params={"text": "spoken", "voice": "v"}),
-            _asset(2, "image", 1, root / "visuals" / "beat_01.png",
-                   params={"prompt": "still", "width": 320, "height": 180}),
-        ])
+        job = _job(
+            "job_m",
+            root.name,
+            [
+                _asset(
+                    1,
+                    "tts",
+                    1,
+                    root / "audio" / "gone.wav",  # never written
+                    params={"text": "spoken", "voice": "v"},
+                ),
+                _asset(
+                    2,
+                    "image",
+                    1,
+                    root / "visuals" / "beat_01.png",
+                    params={"prompt": "still", "width": 320, "height": 180},
+                ),
+            ],
+        )
         with pytest.raises(AssemblyError, match="gone.wav"):
             assemble_job(root, job)
 
     def test_deliverables_listing_attributed_to_job(self, tmp_path: Path):
         root = _project(tmp_path)
         job, root = _video_job_fixture(root)
-        write_job_plan(root, job_id=job.id, platform_id="youtube",
-                       format_id="youtube_shorts", kind="video", width=320, height=180,
-                       container="mp4", fps=30)
+        write_job_plan(
+            root,
+            job_id=job.id,
+            platform_id="youtube",
+            format_id="youtube_shorts",
+            kind="video",
+            width=320,
+            height=180,
+            container="mp4",
+            fps=30,
+        )
         assemble_job(root, job)
         (root / "output" / "stranger.mp4").write_bytes(b"not this job's file")
         items = list_deliverables(root, job)
@@ -520,23 +810,38 @@ def _engine_with_assembly(registry: Registry, projects_root: Path) -> JobEngine:
     def assembler(job: Job) -> None:
         _assemble(projects_root / job.project, job)
 
-    return JobEngine(registry, projects_root=projects_root, assembler=assembler,
-                     backoff_base_s=0.01)
+    return JobEngine(
+        registry, projects_root=projects_root, assembler=assembler, backoff_base_s=0.01
+    )
 
 
 class TestEngineAssemblyHook:
     def _two_beat_assets(self, root: Path) -> list[AssetSpec]:
         return [
-            AssetSpec(kind="tts", beat_index=1, out_path=root / "audio" / "beat_01.wav",
-                      params={"text": "hook line", "voice": "v"}),
-            AssetSpec(kind="image", beat_index=1,
-                      out_path=root / "visuals" / "beat_01.png",
-                      params={"prompt": "hook visual", "width": 320, "height": 180}),
-            AssetSpec(kind="tts", beat_index=2, out_path=root / "audio" / "beat_02.wav",
-                      params={"text": "closing line", "voice": "v"}),
-            AssetSpec(kind="image", beat_index=2,
-                      out_path=root / "visuals" / "beat_02.png",
-                      params={"prompt": "closing visual", "width": 320, "height": 180}),
+            AssetSpec(
+                kind="tts",
+                beat_index=1,
+                out_path=root / "audio" / "beat_01.wav",
+                params={"text": "hook line", "voice": "v"},
+            ),
+            AssetSpec(
+                kind="image",
+                beat_index=1,
+                out_path=root / "visuals" / "beat_01.png",
+                params={"prompt": "hook visual", "width": 320, "height": 180},
+            ),
+            AssetSpec(
+                kind="tts",
+                beat_index=2,
+                out_path=root / "audio" / "beat_02.wav",
+                params={"text": "closing line", "voice": "v"},
+            ),
+            AssetSpec(
+                kind="image",
+                beat_index=2,
+                out_path=root / "visuals" / "beat_02.png",
+                params={"prompt": "closing visual", "width": 320, "height": 180},
+            ),
         ]
 
     def test_assembler_runs_before_finalize(self, tmp_path: Path):
@@ -566,12 +871,24 @@ class TestEngineAssemblyHook:
         def bad_assembler(job: Job) -> None:
             raise RuntimeError("encode exploded")
 
-        engine = JobEngine(registry, projects_root=tmp_path / "projects",
-                           assembler=bad_assembler, backoff_base_s=0.01)
+        engine = JobEngine(
+            registry,
+            projects_root=tmp_path / "projects",
+            assembler=bad_assembler,
+            backoff_base_s=0.01,
+        )
         try:
-            job = engine.create_job("boom", [AssetSpec(
-                kind="tts", beat_index=1, out_path=root / "audio" / "beat_01.wav",
-                params={"text": "spoken", "voice": "v"})])
+            job = engine.create_job(
+                "boom",
+                [
+                    AssetSpec(
+                        kind="tts",
+                        beat_index=1,
+                        out_path=root / "audio" / "beat_01.wav",
+                        params={"text": "spoken", "voice": "v"},
+                    )
+                ],
+            )
             engine.start(engine.estimate(job.id).id)
             final = engine.wait(job.id, {"failed"}, timeout=30)
             assert final.status == "failed"
@@ -584,12 +901,19 @@ class TestEngineAssemblyHook:
         root = _project(tmp_path, "plain")
         registry = Registry()
         registry.register("tts", MockTTSProvider())
-        engine = JobEngine(registry, projects_root=tmp_path / "projects",
-                           backoff_base_s=0.01)
+        engine = JobEngine(registry, projects_root=tmp_path / "projects", backoff_base_s=0.01)
         try:
-            job = engine.create_job("plain", [AssetSpec(
-                kind="tts", beat_index=1, out_path=root / "audio" / "beat_01.wav",
-                params={"text": "spoken", "voice": "v"})])
+            job = engine.create_job(
+                "plain",
+                [
+                    AssetSpec(
+                        kind="tts",
+                        beat_index=1,
+                        out_path=root / "audio" / "beat_01.wav",
+                        params={"text": "spoken", "voice": "v"},
+                    )
+                ],
+            )
             engine.start(engine.estimate(job.id).id)
             final = engine.wait(job.id, {"completed"}, timeout=30)
             assert final.status == "completed"
@@ -605,12 +929,21 @@ class TestEngineAssemblyHook:
         def recorder(job: Job) -> None:
             calls.append(job.id)
 
-        engine = JobEngine(registry, projects_root=tmp_path / "projects",
-                           assembler=recorder, backoff_base_s=0.01)
+        engine = JobEngine(
+            registry, projects_root=tmp_path / "projects", assembler=recorder, backoff_base_s=0.01
+        )
         try:
-            job = engine.create_job("again", [AssetSpec(
-                kind="tts", beat_index=1, out_path=root / "audio" / "beat_01.wav",
-                params={"text": "spoken", "voice": "v"})])
+            job = engine.create_job(
+                "again",
+                [
+                    AssetSpec(
+                        kind="tts",
+                        beat_index=1,
+                        out_path=root / "audio" / "beat_01.wav",
+                        params={"text": "spoken", "voice": "v"},
+                    )
+                ],
+            )
             engine.start(engine.estimate(job.id).id)
             engine.wait(job.id, {"completed"}, timeout=30)
             assert calls == [job.id]  # finalize hook ran once
@@ -624,12 +957,24 @@ class TestEngineAssemblyHook:
         root = _project(tmp_path, "early")
         registry = Registry()
         registry.register("tts", MockTTSProvider())
-        engine = JobEngine(registry, projects_root=tmp_path / "projects",
-                           assembler=lambda job: None, backoff_base_s=0.01)
+        engine = JobEngine(
+            registry,
+            projects_root=tmp_path / "projects",
+            assembler=lambda job: None,
+            backoff_base_s=0.01,
+        )
         try:
-            job = engine.create_job("early", [AssetSpec(
-                kind="tts", beat_index=1, out_path=root / "audio" / "beat_01.wav",
-                params={"text": "spoken", "voice": "v"})])
+            job = engine.create_job(
+                "early",
+                [
+                    AssetSpec(
+                        kind="tts",
+                        beat_index=1,
+                        out_path=root / "audio" / "beat_01.wav",
+                        params={"text": "spoken", "voice": "v"},
+                    )
+                ],
+            )
             with pytest.raises(IllegalTransition):
                 engine.assemble(job.id)  # still draft — nothing to assemble
         finally:
@@ -638,8 +983,7 @@ class TestEngineAssemblyHook:
     def test_assemble_method_without_assembler_configured(self, tmp_path: Path):
         registry = Registry()
         registry.register("tts", MockTTSProvider())
-        engine = JobEngine(registry, projects_root=tmp_path / "projects",
-                           backoff_base_s=0.01)
+        engine = JobEngine(registry, projects_root=tmp_path / "projects", backoff_base_s=0.01)
         try:
             job = engine.create_job("x", [])
             engine.start(engine.estimate(job.id).id)  # zero-asset job → completed
@@ -669,8 +1013,9 @@ class TestEngineAssemblyHook:
             # carries the provenance that this is the original beat 2.
             assert [b.index for b in first_manifest.beats] == [1]
             assert first_manifest.beats[0].audio_file == "audio/beat_02.wav"
-            failed_image = next(a for a in partial.assets
-                                if a.kind == "image" and a.beat_index == 1)
+            failed_image = next(
+                a for a in partial.assets if a.kind == "image" and a.beat_index == 1
+            )
             assert failed_image.status == "failed"
             tts_calls_after_round1 = tts.generate_calls
             image_calls_after_round1 = image.generate_calls
@@ -684,7 +1029,8 @@ class TestEngineAssemblyHook:
             refreshed = read_manifest(root / "plan" / f"{job.id}_manifest.json")
             assert [b.index for b in refreshed.beats] == [1, 2]
             assert [b.audio_file for b in refreshed.beats] == [
-                "audio/beat_01.wav", "audio/beat_02.wav"
+                "audio/beat_01.wav",
+                "audio/beat_02.wav",
             ]
             assert healthy.generate_calls == 1  # exactly the retried asset ran
             assert tts.generate_calls == tts_calls_after_round1  # audio never redone

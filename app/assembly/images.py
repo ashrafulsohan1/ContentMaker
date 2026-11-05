@@ -1,4 +1,4 @@
-"""Platform-correct PNG/JPEG image export (BUILD_PLAN 1.12; spec §6.4).
+"""Platform-correct PNG/JPEG image export (BUILD_PLAN 1.12/3.2; spec §6.4).
 
 Every exported image lands at the **exact** platform resolution of its
 format (app/data/platforms.json): the source is scaled down/up with aspect
@@ -6,20 +6,28 @@ preserved (``force_original_aspect_ratio=decrease``) and padded onto a black
 canvas to the target size — never cropped, never stretched. The container
 decides the encoder: ``jpg`` → mjpeg, ``png`` → png.
 
-An optional per-image text overlay uses ffmpeg ``drawtext`` (the ruling from
-task 1.4 moved mock-image labels here). The overlay text is passed through a
-``textfile`` (UTF-8, i18n-friendly) instead of the filter string, so user text
-can never break filter escaping; the font comes from :func:`find_font`
-(``CONTENTMAKER_FONT`` env override first, then well-known system fonts). A
-requested overlay with no usable font is a loud
-:class:`~app.assembly.AssemblyError` naming the env var — never a silent
-unlabeled export.
+An optional per-image text overlay uses ffmpeg ``drawtext`` — the task 3.2
+ruling (DECISIONS D13). The 3.0 spike data (research/gemini-image.md §3/§4.4)
+says overlay text must be drawn locally, never baked into the generation
+prompt, and that either local tool would work; the Windows font probe broke
+the tie: Pillow 13 resolves bare font names and ships a scalable bundled
+default, i.e. its font handling is fine too — so Pillow was rejected not for
+capability but for cost: a new compiled dependency to duplicate an export
+path ffmpeg already performs (scale/pad/JPEG in the same pass), while the one
+Pillow nicety (bare-name font lookup) is available to ``find_font`` without
+any dependency. The overlay text is passed through a ``textfile`` (UTF-8,
+i18n-friendly) instead of the filter string, so user text can never break
+filter escaping; the font comes from :func:`find_font` (``CONTENTMAKER_FONT``
+env override first, then well-known system fonts). A requested overlay with
+no usable font is a loud :class:`~app.assembly.AssemblyError` naming the env
+var — never a silent unlabeled export.
 
 Windows-path note: inside a filter string, a drive-colon path must be
 single-quoted **and** its colon escaped (``fontfile='C\\:/...'``); the
 pre-flight smoke on ffmpeg 8 confirmed that form (a bare quoted path does not
 parse). All media I/O goes through :class:`app.assembly.ffmpeg.FFmpeg`.
 """
+
 from __future__ import annotations
 
 import os
@@ -97,12 +105,17 @@ def export_image(
             textfile = _write_textfile(overlay_text, out_path)
             filters.append(_drawtext_filter(font, textfile, height))
         try:
-            runner.run([
-                "-i", Path(src),
-                "-vf", ",".join(filters),
-                *codec_args,
-                "-y", out_path,
-            ])
+            runner.run(
+                [
+                    "-i",
+                    Path(src),
+                    "-vf",
+                    ",".join(filters),
+                    *codec_args,
+                    "-y",
+                    out_path,
+                ]
+            )
         except FFmpegError as exc:  # the documented failure type of this module
             raise AssemblyError(f"image export failed for {Path(src).name}: {exc}") from exc
     finally:
@@ -148,8 +161,11 @@ def _write_textfile(text: str, out_path: Path) -> Path:
     """UTF-8 sidecar for drawtext's textfile= option (keeps user text out of
     filter-escaping entirely); written next to the output, removed by the caller."""
     handle = tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", delete=False,
-        prefix=f".{out_path.stem}.", suffix=".overlay.txt",
+        mode="w",
+        encoding="utf-8",
+        delete=False,
+        prefix=f".{out_path.stem}.",
+        suffix=".overlay.txt",
         dir=str(out_path.parent),
     )
     with handle:

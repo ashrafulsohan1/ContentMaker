@@ -14,9 +14,10 @@
 2. **Video formats** — one MP4 per format (``stitch_video``): manifest beats,
    per-beat visuals (images looped, clips loop-padded), per-beat audio.
 3. **Image/carousel formats** — one platform-correct export per completed
-   beat (``export_image``); a carousel *is* that file set, and single-image
-   formats export every beat so the user picks (per-beat selection policy
-   lands with task 3.4).
+   beat (``export_image``), with the plan's optional per-image text overlay
+   (spec §6.4; ruling in DECISIONS D13 — ffmpeg drawtext stays, no Pillow);
+   a carousel *is* that file set, and single-image formats export every beat
+   so the user picks (per-beat selection policy lands with task 3.4).
 
 Target resolution/container/fps come from the **job plan** — a small
 machine-readable record (``plan/<job_id>_plan.json``) the options step writes
@@ -33,6 +34,7 @@ and a beat whose visual succeeded but audio failed renders with the §6.3
 silent default. Nothing completed → :class:`AssemblyError` (loud, never an
 empty deliverable).
 """
+
 from __future__ import annotations
 
 import json
@@ -74,6 +76,7 @@ class JobPlan:
     height: int
     container: str  # "mp4" | "jpg" | "png"
     fps: int | float
+    overlay_text: str | None = None  # image/carousel only (§6.4); video ignores it
 
 
 def write_job_plan(
@@ -87,11 +90,19 @@ def write_job_plan(
     height: int,
     container: str,
     fps: int | float,
+    overlay_text: str | None = None,
 ) -> Path:
     """Write ``plan/<job_id>_plan.json``; returns the path."""
     plan = JobPlan(
-        job_id=job_id, platform_id=platform_id, format_id=format_id, kind=kind,
-        width=int(width), height=int(height), container=container, fps=fps,
+        job_id=job_id,
+        platform_id=platform_id,
+        format_id=format_id,
+        kind=kind,
+        width=int(width),
+        height=int(height),
+        container=container,
+        fps=fps,
+        overlay_text=overlay_text,
     )
     path = _plan_path(project_dir, job_id)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -104,6 +115,7 @@ def write_job_plan(
         "height": plan.height,
         "container": plan.container,
         "fps": plan.fps,
+        "overlay_text": plan.overlay_text,
     }
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return path
@@ -121,6 +133,8 @@ def read_job_plan(project_dir: Path, job_id: str) -> JobPlan | None:
     if not isinstance(data, dict):
         raise AssemblyError(f"job plan {path.name} must be a JSON object")
     try:
+        raw_overlay = data.get("overlay_text")  # pre-3.2 plan files omit the key
+        overlay = raw_overlay if isinstance(raw_overlay, str) and raw_overlay.strip() else None
         return JobPlan(
             job_id=str(data["job_id"]),
             platform_id=str(data["platform_id"]),
@@ -130,6 +144,7 @@ def read_job_plan(project_dir: Path, job_id: str) -> JobPlan | None:
             height=int(data["height"]),
             container=str(data["container"]),
             fps=data["fps"],
+            overlay_text=overlay,
         )
     except KeyError as exc:
         raise AssemblyError(f"job plan {path.name} is missing key {exc.args[0]!r}") from exc
@@ -193,8 +208,11 @@ def list_deliverables(project_dir: Path, job: Job) -> tuple[Deliverable, ...]:
         kind = top if top in ("video", "image", "audio") else "file"
         items.append(
             Deliverable(
-                name=file.name, path=file, size_bytes=file.stat().st_size,
-                media_type=media_type, kind=kind,
+                name=file.name,
+                path=file,
+                size_bytes=file.stat().st_size,
+                media_type=media_type,
+                kind=kind,
             )
         )
     return tuple(items)
@@ -280,9 +298,7 @@ def assemble_job(project_dir: Path, job: Job, *, ffmpeg: FFmpeg | None = None) -
             for spec in probed
         ],
     )
-    manifest_path = write_manifest(
-        manifest, project_dir / "plan" / f"{job.id}{MANIFEST_SUFFIX}"
-    )
+    manifest_path = write_manifest(manifest, project_dir / "plan" / f"{job.id}{MANIFEST_SUFFIX}")
     deliverables: tuple[Path, ...] = ()
     if visuals:
         deliverables = tuple(
@@ -294,8 +310,7 @@ def assemble_job(project_dir: Path, job: Job, *, ffmpeg: FFmpeg | None = None) -
 def _require_on_disk(beat_index: int, path: Path, what: str) -> None:
     if not path.is_file():
         raise AssemblyError(
-            f"beat {beat_index}: {what} file {path.name} is missing on disk —"
-            " regenerate the asset"
+            f"beat {beat_index}: {what} file {path.name} is missing on disk — regenerate the asset"
         )
 
 
@@ -326,8 +341,13 @@ def _build_deliverables(
         width, height = _dims_from_assets(done_visual, runner)
         out = out_dir / f"{base}.mp4"
         stitch_video(
-            manifest, visuals, project_root=project_dir, out_path=out,
-            target_width=width, target_height=height, ffmpeg=runner,
+            manifest,
+            visuals,
+            project_root=project_dir,
+            out_path=out,
+            target_width=width,
+            target_height=height,
+            ffmpeg=runner,
             scratch_dir=project_dir / "state" / "scratch" / job.id,
         )
         return [out]
@@ -335,8 +355,13 @@ def _build_deliverables(
     if plan.kind == "video":
         out = out_dir / f"{base}.mp4"
         stitch_video(
-            manifest, visuals, project_root=project_dir, out_path=out,
-            target_width=plan.width, target_height=plan.height, ffmpeg=runner,
+            manifest,
+            visuals,
+            project_root=project_dir,
+            out_path=out,
+            target_width=plan.width,
+            target_height=plan.height,
+            ffmpeg=runner,
             scratch_dir=project_dir / "state" / "scratch" / job.id,
         )
         return [out]
@@ -344,8 +369,15 @@ def _build_deliverables(
     outs = []
     for index in sorted(visuals):
         out = out_dir / f"{base}_beat_{index:02d}.{extension}"
-        export_image(visuals[index].file, out, width=plan.width, height=plan.height,
-                     container=extension, ffmpeg=runner)
+        export_image(
+            visuals[index].file,
+            out,
+            width=plan.width,
+            height=plan.height,
+            container=extension,
+            overlay_text=plan.overlay_text,
+            ffmpeg=runner,
+        )
         outs.append(out)
     return outs
 
