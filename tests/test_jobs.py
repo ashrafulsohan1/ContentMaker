@@ -493,6 +493,72 @@ def test_retry_asset_while_job_is_running_is_honored(projects_root: Path):
         eng.stop()
 
 
+def test_retry_asset_on_cancelled_job_reopens_and_completes(
+    engine, projects_root: Path, registry: Registry
+):
+    """ui-f2: a cancelled job must be resumable via per-asset retry (§6.6).
+
+    The monitor offers retry buttons on a cancelled job's skipped assets, so
+    the engine must honor them: cancelled → ``reopen_for_retry`` → running,
+    the re-queued asset regenerates, and the job finalizes again — while the
+    other skipped assets stay retryable (only done work is never redone)."""
+    root = projects_root / "alpha"
+    registry.register("tts", FlakyTTS(failures=0))
+    job = engine.create_job(
+        "alpha", [tts_spec(root, 1), tts_spec(root, 2)], providers={"tts": "flaky"}
+    )
+    engine.estimate(job.id)
+    engine.cancel(job.id)  # never started → every asset skipped
+    assert engine.job(job.id).status == "cancelled"
+    assert [a.status for a in engine.job(job.id).assets] == ["skipped", "skipped"]
+
+    retried = engine.retry_asset(job.id, engine.job(job.id).assets[0].id)
+    assert retried.status == "running"
+    final = run_to_end(engine, job.id)
+    assert final.status == "partial"  # beat 2 still skipped — retry it too
+    assert [a.status for a in final.assets] == ["done", "skipped"]
+
+    engine.retry_asset(job.id, final.assets[1].id)
+    completed = run_to_end(engine, job.id)
+    assert completed.status == "completed"
+    assert [a.status for a in completed.assets] == ["done", "done"]
+
+
+def test_retry_asset_does_not_mutate_the_asset_when_reopen_refuses(
+    engine, projects_root: Path, registry: Registry, monkeypatch
+):
+    """ui-f3: ``retry_asset`` must finish every fallible validation BEFORE it
+    touches the asset. Mutating first meant a refused reopen (here simulated
+    at the store seam — any store-level refusal must behave the same) left the
+    asset stuck ``pending`` with its error wiped behind a 409, a state the
+    assemble/export paths silently tolerate, dropping it from the deliverable
+    set."""
+    root = projects_root / "alpha"
+    registry.register("tts", FlakyTTS(failures=99, retryable=True))
+    job = engine.create_job(
+        "alpha", [img_spec(root, 1), tts_spec(root, 1)], providers={"tts": "flaky"}
+    )
+    engine.estimate(job.id)
+    engine.start(job.id)
+    partial = run_to_end(engine, job.id)
+    assert partial.status == "partial"
+    failed = next(a for a in partial.assets if a.status == "failed")
+
+    def refuse(self: JobStore, job_id: str) -> None:
+        raise IllegalTransition(f"reopen_for_retry refuses job '{job_id}' (simulated)")
+
+    monkeypatch.setattr(JobStore, "reopen_for_retry", refuse)
+    with pytest.raises(IllegalTransition):
+        engine.retry_asset(job.id, failed.id)
+
+    after = engine.job(job.id)
+    assert after.status == "partial"  # job untouched too — no half reopen
+    asset = next(a for a in after.assets if a.id == failed.id)
+    assert asset.status == "failed"  # NOT stuck pending
+    assert asset.attempts == failed.attempts
+    assert asset.error == failed.error
+
+
 def test_worker_crash_marks_job_failed_and_worker_survives(
     engine, projects_root: Path, monkeypatch
 ):

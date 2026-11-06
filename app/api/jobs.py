@@ -81,10 +81,10 @@ def retry_asset(job_id: str, asset_id: int, request: Request) -> dict[str, Any]:
     The JSON mutation surface for the monitor's per-asset retry button: the
     job engine re-runs exactly this asset on its provider — completed assets
     are never re-generated, their spend is not re-recorded, and a terminal
-    job is re-opened through the sanctioned ``reopen_for_retry`` move to pick
-    the asset up. Errors answer JSON: 404 unknown job/asset; 409 when the
-    asset is not failed|skipped, belongs to another job, or the job is
-    cancelled (a cancelled job stays final).
+    job (cancelled included) is re-opened through the sanctioned
+    ``reopen_for_retry`` move to pick the asset up. Errors answer JSON:
+    404 unknown job/asset; 409 when the asset is not failed|skipped or
+    belongs to another job.
     """
     engine = engine_of(request)
     try:

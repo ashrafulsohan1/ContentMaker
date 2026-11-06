@@ -328,14 +328,20 @@ class TestOptions:
         assert "checked" in audio
         assert "checked" in dry
 
-    def test_formats_fragment_filters_by_platform(self, tmp_path):
+    def test_formats_fragment_reads_the_param_htmx_sends(self, tmp_path):
+        """ui-f1 regression: the Platform select (options.html name=platform_id,
+        hx-include=self) GETs /options/formats?platform_id=... on change — the
+        fragment must key off that exact param. Keying off anything else always
+        renders the empty 'Choose a platform first' placeholder and dead-ends
+        the options step."""
         client = make_client(tmp_path)
         start_flow(client)
-        frag = client.get("/options/formats", params={"platform": "instagram"})
+        frag = client.get("/options/formats", params={"platform_id": "instagram"})
         assert frag.status_code == 200
         assert 'value="instagram_reels"' in frag.text
         assert 'value="instagram_carousel"' in frag.text
         assert "youtube_shorts" not in frag.text
+        assert "Choose a platform first" not in frag.text
 
     def test_registry_availability_is_shown(self, tmp_path):
         client = make_client(tmp_path)

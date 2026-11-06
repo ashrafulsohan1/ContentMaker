@@ -28,13 +28,15 @@ project of ``projects_root``):
   assembly/images.py). Removed when the owning job is terminal or unknown to
   the project's job.db — and always only once older than the min age.
 - **orphans of cancelled runs** — files at the ``out_path`` of a *cancelled*
-  job's failed/skipped/generating assets. A cancelled job is terminal with no
-  reopen path (core/jobs.py ``reopen_for_retry``), so no app flow can ever use
-  those files again; §6.6's "cancel keeps completed assets" is why ``done``
-  assets are excluded, and failed/partial jobs (retryable) are left alone.
-  db-derived paths are resolved and only removed when still inside the project
-  folder — a corrupt row must never turn maintenance into a deletion
-  primitive outside it.
+  job's failed/skipped/generating assets (§6.6's "cancel keeps completed
+  assets" is why ``done`` assets are excluded; completed/partial/failed jobs
+  are retryable and left alone). Cancelled jobs are per-asset retryable too
+  (core/jobs.py ``reopen_for_retry``) — the candidate JOIN is recomputed from
+  job.db on every sweep, so a retried asset (``pending``) or reopened job
+  (``running``) leaves the candidate set at once, and the age guard protects
+  anything fresh. db-derived paths are resolved and only removed when still
+  inside the project folder — a corrupt row must never turn maintenance into
+  a deletion primitive outside it.
 
 No OS scheduler, no external automation (§6.7, §11.6): the only trigger is
 this app's own startup + interval loop.

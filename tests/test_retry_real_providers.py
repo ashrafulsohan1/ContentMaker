@@ -8,8 +8,9 @@ test_preview_export.py. Task 4.4 is the real-provider + API proof:
 - **The JSON API carries the mutation.** ``POST
   /api/jobs/{job_id}/assets/{asset_id}/retry`` re-queues one failed|skipped
   asset — the JSON surface was read-only before 4.4. Same contract as the
-  engine: 404 unknown job/asset, 409 when the asset is not failed|skipped,
-  belongs to another job, or the job is cancelled (reopen_for_retry refuses).
+  engine: 404 unknown job/asset, 409 when the asset is not failed|skipped or
+  belongs to another job; a cancelled job IS retryable (reopen_for_retry
+  accepts cancelled — its skipped assets re-queue like a partial's).
 - **A retry rides the real Gemini adapters** (TTS / image / video, offline via
   httpx.MockTransport) and must not redo already-paid assets — on the wire:
   the provider is called for the retried beat only (done beats are never
@@ -334,15 +335,19 @@ class TestJsonRetryEndpoint:
         assert resp.status_code == 409
         assert "does not belong" in resp.json()["detail"]
 
-    def test_cancelled_job_is_409(self, tmp_path):
+    def test_cancelled_job_is_retryable_via_the_json_api(self, tmp_path):
         with Harness(tmp_path, mock_registry()) as h:
             job = h.engine.create_job("demo", tts_assets(h.root, "demo", {1: "One.", 2: "Two."}))
             h.engine.estimate(job.id)
             h.engine.cancel(job.id)  # never started → every asset skipped
             skipped_id = next(a.id for a in h.engine.job(job.id).assets)
             resp = h.client.post(f"/api/jobs/{job.id}/assets/{skipped_id}/retry")
-            assert resp.status_code == 409
-            assert "cancelled" in resp.json()["detail"]
+            assert resp.status_code == 200
+            assert resp.json()["status"] == "running"
+            final = h.engine.wait(job.id, TERMINAL)
+            h.engine.wait_idle()
+            assert final.status == "partial"  # beat 1 re-queued, beat 2 still skipped
+            assert [a.status for a in final.assets] == ["done", "skipped"]
 
 
 # --- real Gemini TTS: a retry re-POSTs only the failed beat --------------------------

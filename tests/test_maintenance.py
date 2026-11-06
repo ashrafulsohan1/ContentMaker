@@ -11,8 +11,9 @@ generation jobs. Concretely, in this codebase's on-disk vocabulary:
   re-runs on terminal jobs and any race the status read misses);
 - stale scratch of terminal or unknown jobs, plan-less ``.stitch_scratch``
   dirs, ``.overlay.txt`` drawtext sidecars (assembly/images.py), and files of
-  failed/skipped assets of *cancelled* jobs (terminal — reopen_for_retry
-  rejects cancelled, core/jobs.py) are removed;
+  failed/skipped assets of *cancelled* jobs (a live job.db JOIN — a retried
+  asset or reopened job leaves the candidate set at once, core/jobs.py) are
+  removed;
 - an unreadable job.db skips the project instead of guessing;
 - db-derived paths outside the project are never deleted;
 - a sweep never raises into the app and counts what it could not remove;

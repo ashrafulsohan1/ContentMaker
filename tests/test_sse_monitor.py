@@ -16,7 +16,8 @@ Pins spec §6.6/§8 at the HTTP level:
 - ``POST /jobs/{id}/cancel`` and ``POST /jobs/{id}/assets/{asset_id}/retry``
   drive ``JobEngine.cancel`` / ``retry_asset`` (§6.6: cancel keeps completed
   assets and skips never-started ones; retry re-runs one failed|skipped asset
-  without redoing done ones; a cancelled job is terminal and refuses retries).
+  without redoing done ones; a cancelled job is resumable per-asset — its
+  failed/skipped assets keep retryable buttons and a retry reopens it).
   Both answer a plain form with a 303 redirect and an ``HX-Request`` with the
   updated ``#monitor`` fragment.
 
@@ -469,7 +470,11 @@ class TestMonitorPage:
             else:
                 assert hidden is True, (asset_id, status, body)
 
-    def test_no_retry_forms_on_cancelled_job(self, tmp_path):
+    def test_cancelled_job_offers_retry_buttons_on_failed_and_skipped_assets(self, tmp_path):
+        """ui-f2: the monitor's own hint promises "retry buttons appear on
+        failed or skipped assets" — a cancelled job leaves its never-started
+        assets skipped, so they must be offered (the job is resumable
+        per-asset; reopen_for_retry accepts cancelled)."""
         tts = ScriptedTTS()
         tts.hold(1)
         client = make_client(tmp_path, tts=tts)
@@ -481,11 +486,19 @@ class TestMonitorPage:
         )
         client.post(f"/jobs/{job_id}/cancel", follow_redirects=False)
         tts.unblock()
-        wait_terminal(client, job_id)
+        payload = wait_terminal(client, job_id)
+        assert payload["status"] == "cancelled"
         page = client.get(f"/jobs/{job_id}")
         assert ">cancelled<" in page.text
-        for asset_id, body in monitor_rows(page.text).items():
-            assert retry_hidden(body, job_id, asset_id) is None, (asset_id, body)
+        rows = monitor_rows(page.text)
+        statuses = {asset_id: row_status(body) for asset_id, body in rows.items()}
+        assert "skipped" in statuses.values()
+        for asset_id, body in rows.items():
+            hidden = retry_hidden(body, job_id, asset_id)
+            if statuses[asset_id] in ("failed", "skipped"):
+                assert hidden is False, (asset_id, statuses[asset_id], body)
+            else:
+                assert hidden is True, (asset_id, statuses[asset_id], body)
 
     def test_page_and_script_wire_the_sse_client(self, tmp_path):
         client = make_client(tmp_path)
@@ -690,7 +703,11 @@ class TestCancelAndRetryRoutes:
         assert resp.status_code == 409
         assert "does not belong" in resp.text
 
-    def test_retry_on_cancelled_job_is_409(self, tmp_path):
+    def test_retry_on_cancelled_job_requeues_and_completes(self, tmp_path):
+        """ui-f2: a skipped asset of a cancelled job is retryable from the
+        monitor — the POST reopens the job (cancelled → running) and the
+        re-queued asset regenerates; the remaining skipped assets keep their
+        retry buttons, so the job stays resumable to the last asset."""
         tts = ScriptedTTS()
         tts.hold(1)
         client = make_client(tmp_path, tts=tts)
@@ -701,14 +718,23 @@ class TestCancelAndRetryRoutes:
             message="first asset never started generating",
         )
         client.post(f"/jobs/{job_id}/cancel", follow_redirects=False)
-        skipped = next(
-            a["id"] for a in job_payload(client, job_id)["assets"] if a["status"] == "skipped"
-        )
         tts.unblock()
-        wait_terminal(client, job_id)
+        payload = wait_terminal(client, job_id)
+        skipped = next(a["id"] for a in payload["assets"] if a["status"] == "skipped")
+
         resp = client.post(f"/jobs/{job_id}/assets/{skipped}/retry", follow_redirects=False)
-        assert resp.status_code == 409
-        assert "cancelled" in resp.text
+        assert resp.status_code == 303  # plain form → back to the monitor
+        assert resp.headers["location"] == f"/jobs/{job_id}"
+
+        final = wait_terminal(client, job_id)
+        assert final["status"] == "partial"  # this asset done, the rest still skipped
+        retried = next(a for a in final["assets"] if a["id"] == skipped)
+        assert retried["status"] == "done"
+        assert not retried["error"]  # the stale "cancelled before start" is cleared
+        page = client.get(f"/jobs/{job_id}")
+        for asset_id, body in monitor_rows(page.text).items():
+            if row_status(body) == "skipped":  # still resumable from the UI
+                assert retry_hidden(body, job_id, asset_id) is False, (asset_id, body)
 
     def test_retry_htmx_request_returns_monitor_fragment(self, tmp_path):
         tts = ScriptedTTS()

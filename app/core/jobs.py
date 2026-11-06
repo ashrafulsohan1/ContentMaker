@@ -360,14 +360,19 @@ class JobStore:
             )
 
     def reopen_for_retry(self, job_id: str) -> None:
-        """Sanctioned terminal → running move, only for per-asset retry (§6.6)."""
+        """Sanctioned terminal → running move, only for per-asset retry (§6.6).
+
+        ``cancelled`` is reopenable too: a cancelled job stays resumable
+        per-asset — its failed/skipped assets may be re-queued exactly like a
+        partial's, and done assets are still never redone.
+        """
         with self._connect() as conn:
             current = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
             if current is None:
                 raise JobNotFound(job_id)
-            if current["status"] not in ("partial", "failed", "completed"):
+            if current["status"] not in ("partial", "failed", "completed", "cancelled"):
                 raise IllegalTransition(
-                    f"reopen_for_retry requires partial|failed|completed"
+                    f"reopen_for_retry requires partial|failed|completed|cancelled"
                     f" (job '{job_id}' is '{current['status']}')"
                 )
             conn.execute(
@@ -659,9 +664,13 @@ class JobEngine:
                 f"asset {asset_id} is '{asset.status}'; only failed|skipped assets can be retried"
             )
         store = self.store(job.project)
-        store.update_asset(asset_id, status="pending", error=None)
         if job.status in TERMINAL_JOB_STATUSES:
+            # Every fallible validation runs BEFORE the asset is touched: a
+            # refused reopen must not leave the asset re-queued ("pending",
+            # error wiped) behind a 409 — the pre-retry state is what the
+            # monitor shows, and assemble/export trust it.
             store.reopen_for_retry(job_id)
+        store.update_asset(asset_id, status="pending", error=None)
         self._enqueue(job.project, job_id)
         return self.job(job_id)
 

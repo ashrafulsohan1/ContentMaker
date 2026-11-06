@@ -273,7 +273,10 @@ def options(request: Request):
 
 @router.get("/options/formats")
 def formats_fragment(request: Request):
-    platform_id = request.query_params.get("platform", "")
+    # The Platform select posts itself as name="platform_id" (options.html,
+    # hx-include=self) — the fragment must key off the param htmx actually
+    # sends, or every platform change renders the empty placeholder.
+    platform_id = request.query_params.get("platform_id", "")
     formats = _formats_for(platform_id, load_platforms())
     flow = _flow(request)
     format_id = flow.options.format_id if flow and flow.options else ""
@@ -563,7 +566,10 @@ def confirm_job(job_id: str, request: Request):
 # (GET /api/jobs/{id}/events) and mirrors every snapshot into this DOM.
 # Cancel + per-asset retry are plain form posts (htmx gets the fragment back).
 
-RETRYABLE_JOB_STATUSES = ("running", "partial", "failed", "completed")
+# Job statuses whose monitor shows the per-asset retry forms. Cancelled jobs
+# are included: their never-started assets are "skipped" and the job stays
+# resumable per-asset (§6.6 — reopen_for_retry accepts cancelled).
+RETRYABLE_JOB_STATUSES = ("running", "partial", "failed", "completed", "cancelled")
 
 
 def _fetch_job(request: Request, job_id: str) -> Job:
