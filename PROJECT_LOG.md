@@ -89,4 +89,26 @@ In progress — run `dwfrun-98de313d` live; will pause automatically when the us
 - [ ] Release captain escalates for repo name/visibility (private recommended); user Gemini key for real-provider smokes
 
 ### Status
-Paused by user token quota — run healthy at last check; restart protocol above.
+Paused by user token quota — run healthy at last check; restart protocol above. (Superseded: the run resumed and executed M2 through M4 to completion — see next session.)
+
+## Session — 2026-11-06 → 2026-11-07
+**Goal:** Resume `dwfrun-b1dd41e3` from cache and drive the build to release — M2 remainder → M3 → M4 → v1.0.0 release prep.
+
+### Changes
+- **M2 completed:** Gemini TTS provider wired + ffprobe-probed manifest durations (`bb14485`); confirm-before-spend + hard caps pinned end-to-end on the real provider (`b4cd1cc`); smoke_m2 gate (`999005c`); review hardening — transport-proof key probe, no-JS error banner, pre-swap key-store chmod, loud WAV-splice refusal (`5a118d6`).
+- **M3 completed:** image research spike (`c7b3890`); Gemini image provider with style anchoring (`5cdbb4f`); ffmpeg drawtext overlay + D13 ruling (`916470b`); assembly hardening with real-asset pins (`a38544a`); carousel min/max contract + export ZIP bundle, D14 (`441818f`); smoke_m3 gate (`91ef994`); review fixes (`3e09ccd`).
+- **M4 completed:** Veo spike (`e325dc7`); Gemini video provider — two-level async polling, per-second pricing, prices.json flipped to `verified: true` (`ac11a1c`); Ken Burns stills→video fallback, reconciling WIP `9bceebb` (`315a8b1`); real process-kill resume proof (`129a489`); per-asset retry JSON API (`698e7ed`); spend guardrail polish (`bf3e2a1`); README (`03b3419`); smoke_m4 gate (`8e3c4a3`); review fixes (`a4fcef1`); UI sweep ui-f1..f3 (`3b3c689`).
+- **Release prep (2026-11-07):** README completeness pass for a new user (platform list corrected to the seven shipped platforms — Facebook/Instagram/LinkedIn/Pinterest/TikTok/X/YouTube; Ken Burns fallback documented); DECISIONS.md + PROJECT_LOG.md status refresh; annotated tag `v1.0.0` cut on the release-prep commit. Nothing pushed.
+- Suite at **638 passed + 1 skipped** (pre-existing Windows chmod skip), ruff clean.
+
+### Decisions & notes
+- WIP `9bceebb` was reconciled into task 4.2 as planned (`315a8b1` marks the task boundary).
+- Ken Burns composition means an MP4 deliverable needs no video-capable key; the Veo ~3s-clip limitation stays documented in README §5 as a design deferral.
+
+### Next steps
+- [ ] Merge `milestone/1-skeleton` → `main` at release (main sits at Phase 0, 49 commits behind)
+- [ ] GitHub release: confirm repo name + visibility with the user (private recommended); push branch + tag
+- [ ] Real-provider smokes once the user adds a Gemini key (`state/` holds no `keys.json` as of 2026-11-07)
+
+### Status
+Release prep complete — `v1.0.0` tagged locally on `milestone/1-skeleton`; merge-to-main and the GitHub release remain (captain decisions; nothing pushed).

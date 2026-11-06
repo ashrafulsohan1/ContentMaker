@@ -94,9 +94,10 @@ The UI walks you through four steps:
 1. **New script** — paste your finished script and name the project.
 2. **Review beats** — the script is split into beats (blank lines); edit,
    merge, or split beats as needed.
-3. **Options** — pick platform and format (YouTube, TikTok, Instagram, X —
-   defined in `app/data/platforms.json`), a style preset, TTS/visual providers,
-   the optional **hard spend cap**, and the **dry-run** checkbox.
+3. **Options** — pick platform and format (seven platforms: YouTube, TikTok,
+   Instagram, LinkedIn, X, Facebook, Pinterest — defined in
+   `app/data/platforms.json`), a style preset, TTS/visual providers, the
+   optional **hard spend cap**, and the **dry-run** checkbox.
 4. **Estimate & confirm** — a USD estimate is shown; generating starts only
    after you confirm. Then the job monitor shows per-asset progress, live
    spend, and retry controls. Deliverables land in `projects/<name>/output/`.
@@ -104,7 +105,9 @@ The UI walks you through four steps:
 The pipeline per beat: TTS audio → ffprobe the real duration → a **timing
 manifest** (the single source of truth for assembly) → visuals → local ffmpeg
 assembly into platform-correct deliverables (H.264/AAC MP4 or PNG/JPEG sets,
-including carousels).
+including carousels). If you pick image visuals on an MP4 format, the video is
+composed from the stills automatically — Ken Burns pan/zoom motion with
+crossfades — so a video deliverable does not require a video-capable key.
 
 ## 4. Dry-run mode (no key needed)
 
