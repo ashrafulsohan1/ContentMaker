@@ -9,6 +9,7 @@ scripts/build_exe.py`` and verified by the exe smoke, not here.
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -17,6 +18,7 @@ import pytest
 
 from app.core import binaries
 from app.core.binaries import PackagingError
+from app.providers import catalog
 
 _REPO = Path(__file__).resolve().parents[1]
 _SCRIPT = _REPO / "scripts" / "build_exe.py"
@@ -61,6 +63,27 @@ def test_checked_in_spec_pins_name_and_datas(build_exe: ModuleType):
     assert 'name="ContentMaker"' in text
     for entry in ("app/web/templates", "app/web/static", "app/data", "ffmpeg_bin"):
         assert entry in text
+
+
+def _spec_hiddenimports(text: str) -> set[str]:
+    match = re.search(r"hiddenimports=\[(.*?)\]", text, re.DOTALL)
+    assert match, "ContentMaker.spec has no hiddenimports block"
+    return set(re.findall(r'"([^"]+)"', match.group(1)))
+
+
+def test_spec_hiddenimports_cover_dynamically_imported_probe_modules():
+    # Probes are dispatched through importlib string names (catalog._PROBES →
+    # import_module inside test_provider_key), which PyInstaller's static
+    # analysis cannot see: a probe module missing from hiddenimports is missing
+    # from the exe (pkg-f1 — POST /api/settings/keys/<id>/test then raises
+    # ModuleNotFoundError → HTTP 500).
+    hidden = _spec_hiddenimports(_SPEC.read_text(encoding="utf-8"))
+    for target in catalog._PROBES.values():
+        module_name = target.partition(":")[0]
+        assert module_name in hidden, (
+            f"probe module {module_name!r} is imported dynamically at runtime"
+            " and must be pinned in ContentMaker.spec hiddenimports"
+        )
 
 
 def test_stage_ffmpeg_bin_copies_resolved_binaries(

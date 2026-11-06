@@ -8,15 +8,18 @@ repo it doubles as the friendlier ``python -m uvicorn`` alternative:
     python -m app.launcher --port 9000    # custom port
     python -m app.launcher --no-browser   # headless start
 
-Server binds 127.0.0.1 only (§6.5). The browser opens on a short delay so
-uvicorn has bound before the first request; Ctrl+C is a normal, clean stop.
-Writable content (projects/, state/) lands next to the executable in frozen
-builds (app.config.app_home) or in the repo root in dev.
+Server binds 127.0.0.1 only (§6.5). The browser opens once the server actually
+answers on its port (polled, so a cold one-file exe start can never open the
+tab too early); Ctrl+C is a normal, clean stop. Writable content (projects/,
+state/) lands next to the executable in frozen builds (app.config.app_home)
+or in the repo root in dev.
 """
 from __future__ import annotations
 
 import argparse
+import socket
 import threading
+import time
 import webbrowser
 from collections.abc import Sequence
 
@@ -24,8 +27,10 @@ import uvicorn
 
 from app.config import DEFAULT_HOST, DEFAULT_PORT
 
-# uvicorn needs a moment to bind before the browser dials the URL.
-_BROWSER_OPEN_DELAY_S = 1.0
+# Poll cadence while waiting for uvicorn to bind, and how long to wait before
+# giving up (a server that never comes up must not leave a tab on a dead URL).
+_BROWSER_POLL_S = 0.1
+_BROWSER_OPEN_TIMEOUT_S = 30.0
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -50,17 +55,40 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return args
 
 
-def _open_browser_when_up(url: str) -> None:
-    timer = threading.Timer(_BROWSER_OPEN_DELAY_S, webbrowser.open, (url,))
-    timer.daemon = True
-    timer.start()
+def _port_accepts(host: str, port: int) -> bool:
+    """True once something answers on (host, port) — i.e. uvicorn has bound."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(_BROWSER_POLL_S)
+        return sock.connect_ex((host, port)) == 0
+
+
+def _open_browser_when_up(host: str, port: int) -> threading.Thread:
+    """Open the UI in a browser as soon as the server accepts on its port.
+
+    Polls instead of sleeping a fixed delay (pkg-f2): on a cold one-file exe
+    start the app import alone can outlast any constant, and opening earlier
+    shows the user a connection-refused tab. Gives up after
+    :data:`_BROWSER_OPEN_TIMEOUT_S` so a failed boot never opens a dead URL.
+    """
+    url = f"http://{host}:{port}"
+
+    def _open() -> None:
+        deadline = time.monotonic() + _BROWSER_OPEN_TIMEOUT_S
+        while time.monotonic() < deadline:
+            if _port_accepts(host, port):
+                webbrowser.open(url)
+                return
+            time.sleep(_BROWSER_POLL_S)
+
+    thread = threading.Thread(target=_open, name="open-browser-when-up", daemon=True)
+    thread.start()
+    return thread
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    url = f"http://{DEFAULT_HOST}:{args.port}"
     if not args.no_browser:
-        _open_browser_when_up(url)
+        _open_browser_when_up(DEFAULT_HOST, args.port)
     from app.main import app  # deferred: heavy import, only needed to serve
 
     try:

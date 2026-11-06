@@ -33,7 +33,11 @@ a = Analysis(
     binaries=[],
     datas=DATAS,
     # uvicorn resolves its loop/http/websockets implementations dynamically
-    # inside functions, so static analysis misses the concrete modules.
+    # inside functions, so static analysis misses the concrete modules. Same
+    # for the key probes: the catalog dispatches them via importlib string
+    # names (app.providers.catalog._PROBES → test_provider_key), so each probe
+    # module must be pinned here or Settings' "Test key" endpoint 500s in the
+    # exe (pkg-f1). tests/test_build_exe.py enforces this pin.
     hiddenimports=[
         "uvicorn.logging",
         "uvicorn.loops",
@@ -47,6 +51,7 @@ a = Analysis(
         "uvicorn.protocols.websockets.wsproto_impl",
         "uvicorn.lifespan.off",
         "uvicorn.lifespan.on",
+        "app.providers.gemini.keytest",
     ],
     hookspath=[],
     excludes=[],
