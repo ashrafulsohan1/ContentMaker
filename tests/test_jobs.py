@@ -620,14 +620,37 @@ time.sleep(120)  # killed here, mid-job, by the parent
 
 
 class ResumedTTS:
-    """Records the file names the resuming engine actually (re)generates."""
+    """Records the file names the resuming engine actually (re)generates.
+
+    ``hold(name)`` freezes the FIRST ``generate()`` for that file inside the
+    provider call; ``release()`` lets the worker continue — the test observes
+    the frozen per-asset state through a gate, not a race.
+    """
 
     provider_id = "killprobe"
 
     def __init__(self, calls: list[str]) -> None:
         self.calls = calls
+        self._hold_name: str | None = None
+        self._gate: threading.Event | None = None
+        self._lock = threading.Lock()
+
+    def hold(self, name: str) -> None:
+        self._hold_name = name
+        self._gate = threading.Event()  # created eagerly: release() may fire
+        # before the worker reaches the gate — the signal must never be lost.
+
+    def release(self) -> None:
+        self._gate.set()
 
     def generate(self, request: TTSRequest) -> TTSResult:
+        with self._lock:
+            gate = None
+            if self._hold_name == request.out_path.name:
+                self._hold_name = None  # hold only the first call for that file
+                gate = self._gate
+        if gate is not None and not gate.wait(timeout=30.0):
+            raise ProviderError(self.provider_id, "gate never released", retryable=False)
         self.calls.append(request.out_path.name)
         request.out_path.parent.mkdir(parents=True, exist_ok=True)
         request.out_path.write_bytes(b"parent-wav")
@@ -722,7 +745,9 @@ def test_resume_after_real_process_kill_mid_job(tmp_path: Path, projects_root: P
 
         registry = Registry()
         resumed_calls: list[str] = []
-        registry.register("tts", ResumedTTS(resumed_calls))
+        resumed_tts = ResumedTTS(resumed_calls)
+        resumed_tts.hold("beat_02.wav")  # freeze the redo inside the provider call
+        registry.register("tts", resumed_tts)
         engine2 = JobEngine(
             registry,
             projects_root=projects_root,
@@ -732,11 +757,25 @@ def test_resume_after_real_process_kill_mid_job(tmp_path: Path, projects_root: P
         )
         try:
             assert [j.id for j in engine2.resume()] == [job_id]
-            assert [(a.beat_index, a.status) for a in engine2.job(job_id).assets] == [
+            # The worker re-entered beat 2 and is frozen in its provider call.
+            # 'generating → generating' is an illegal transition (§6.6 table),
+            # so this state is only reachable through resume()'s
+            # generating→pending reset — the clean-redo proof, race-free: beat 1
+            # is still done and beat 3 untouched while the worker is blocked.
+            deadline = time.monotonic() + 10.0
+            while True:
+                states = [(a.beat_index, a.status) for a in engine2.job(job_id).assets]
+                if states[1] == (2, "generating"):
+                    break
+                if time.monotonic() > deadline:
+                    pytest.fail(f"resumed worker never re-entered beat 2: {states}")
+                time.sleep(0.02)
+            assert states == [
                 (1, "done"),  # completed work kept
-                (2, "pending"),  # in-flight work reset for a clean redo
+                (2, "generating"),  # in-flight work reset, now redone
                 (3, "pending"),
             ]
+            resumed_tts.release()
 
             final = engine2.wait(job_id, TERMINAL, timeout=15.0)
             assert final.status == "completed"

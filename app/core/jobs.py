@@ -37,7 +37,8 @@ Implements spec §6.6:
   terminal job without touching asset state (§8 regenerate-then-export).
 
 Terminal job statuses are final except via ``JobStore.reopen_for_retry``
-(sanctioned re-open used by per-asset retry; task 4.4 builds the API on it).
+(sanctioned re-open used by per-asset retry; the retry API/UI surface that
+drives it is BUILD_PLAN 4.4).
 """
 from __future__ import annotations
 
@@ -103,6 +104,12 @@ _ASSET_TRANSITIONS: dict[str, frozenset[str]] = {
 
 class IllegalTransition(ValueError):
     """A job/asset status change that the §6.6 state machine does not allow."""
+
+
+#: Sentinel for ``JobStore.update_asset(error=…)``: "leave the column as is."
+#: An explicit ``error=None`` clears it — the retry/resume/success paths must
+#: be able to drop a stale failure message (a done asset never shows one).
+_ERROR_UNSET: Any = object()
 
 
 class JobNotFound(KeyError):
@@ -401,10 +408,12 @@ class JobStore:
         *,
         status: str | None = None,
         attempts: int | None = None,
-        error: str | None = None,
+        error: str | None | object = _ERROR_UNSET,
         spent_usd: float | None = None,
         estimated_cost_usd: float | None = None,
     ) -> None:
+        """Partial update; omitted fields are left as they are. ``error=None``
+        explicitly clears the column (see the sentinel note above)."""
         with self._connect() as conn:
             row = conn.execute("SELECT status FROM assets WHERE id = ?", (asset_id,)).fetchone()
             if row is None:
@@ -424,9 +433,9 @@ class JobStore:
             if attempts is not None:
                 sets.append("attempts = ?")
                 params.append(attempts)
-            if error is not None:
+            if error is not _ERROR_UNSET:
                 sets.append("error = ?")
-                params.append(error)
+                params.append(error)  # None → NULL: an explicit clear
             if spent_usd is not None:
                 sets.append("spent_usd = ?")
                 params.append(spent_usd)

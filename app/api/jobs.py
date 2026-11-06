@@ -1,10 +1,13 @@
-"""JSON API: read-only job status (BUILD_PLAN 1.10, extended by 1.11/1.12).
+"""JSON API: job status + per-asset retry (BUILD_PLAN 1.10, extended by 1.11/1.12; 4.4).
 
 The UI, the SSE monitor and any API client read job state here instead of
-scraping HTML. Mutations (estimate / confirm / cancel / retry) are driven by
-the web flow and job engine; this router only reports what is persisted, plus
-the derived per-job progress and (1.12) the deliverables local assembly wrote
-into the project's ``output/`` folder.
+scraping HTML. Flow mutations (estimate / confirm / cancel) are driven by
+the web flow; this router reports what is persisted plus the derived per-job
+progress and (1.12) the deliverables local assembly wrote into the project's
+``output/`` folder. Since 4.4 it also carries the one generation mutation
+API clients need: ``POST /jobs/{id}/assets/{asset_id}/retry`` re-queues a
+failed|skipped asset on the real provider without redoing the paid ones
+(§6.6) — the same engine path the monitor's retry button drives.
 """
 from __future__ import annotations
 
@@ -13,7 +16,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from app.assembly.pipeline import list_deliverables
-from app.core.jobs import Job, JobEngine, JobNotFound
+from app.core.jobs import AssetNotFound, Job, JobEngine, JobNotFound
 
 router = APIRouter(prefix="/api")
 
@@ -68,6 +71,32 @@ def get_job(job_id: str, request: Request) -> dict[str, Any]:
         job = engine_of(request).job(job_id)
     except JobNotFound:
         raise HTTPException(status_code=404, detail=f"no job with id '{job_id}'") from None
+    return job_payload(job)
+
+
+@router.post("/jobs/{job_id}/assets/{asset_id}/retry")
+def retry_asset(job_id: str, asset_id: int, request: Request) -> dict[str, Any]:
+    """Re-queue one failed|skipped asset for generation (BUILD_PLAN 4.4, §6.6).
+
+    The JSON mutation surface for the monitor's per-asset retry button: the
+    job engine re-runs exactly this asset on its provider — completed assets
+    are never re-generated, their spend is not re-recorded, and a terminal
+    job is re-opened through the sanctioned ``reopen_for_retry`` move to pick
+    the asset up. Errors answer JSON: 404 unknown job/asset; 409 when the
+    asset is not failed|skipped, belongs to another job, or the job is
+    cancelled (a cancelled job stays final).
+    """
+    engine = engine_of(request)
+    try:
+        job = engine.retry_asset(job_id, asset_id)
+    except JobNotFound:
+        raise HTTPException(status_code=404, detail=f"no job with id '{job_id}'") from None
+    except AssetNotFound:
+        raise HTTPException(
+            status_code=404, detail=f"no asset with id {asset_id} in job '{job_id}'"
+        ) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     return job_payload(job)
 
 
