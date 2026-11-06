@@ -25,6 +25,9 @@
 
 from __future__ import annotations
 
+import math
+import struct
+import subprocess
 import wave
 from pathlib import Path
 
@@ -121,6 +124,116 @@ def _probe_streams(ff: FFmpeg, path: Path) -> tuple[dict, dict | None, float | N
     audio = next((s for s in data["streams"] if s.get("codec_type") == "audio"), None)
     raw = data["format"].get("duration")
     return video, audio, None if raw is None else float(raw)
+
+
+def _tone_wav(path: Path, seconds: float, rate: int = 8000, freq: float = 440.0) -> None:
+    """A *non-silent* WAV — audio-placement assertions need audible content."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frames = round(seconds * rate)
+    payload = b"".join(
+        struct.pack("<h", round(9000 * math.sin(2 * math.pi * freq * i / rate)))
+        for i in range(frames)
+    )
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(rate)
+        wav.writeframes(payload)
+
+
+def _solid_png(path: Path, color: str, width: int = 64, height: int = 64) -> Path:
+    """A flat-color still — zoom motion is invisible on it, isolating transitions."""
+    FFmpeg().run(
+        ["-f", "lavfi", "-i", f"color=c={color}:s={width}x{height}", "-frames:v", "1", "-y", path]
+    )
+    return path
+
+
+def _gray_frame(path: Path, second: float) -> bytes:
+    """The frame displayed at ``second`` as raw gray pixels (frame-exact seek)."""
+    proc = subprocess.run(
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-i",
+            str(path),
+            "-ss",
+            f"{second:.3f}",
+            "-frames:v",
+            "1",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "gray",
+            "-y",
+            "-",
+        ],
+        capture_output=True,
+        check=True,
+    )
+    return proc.stdout
+
+
+def _gray_mean_at(path: Path, second: float) -> float:
+    """Mean luma of the frame displayed at ``second``."""
+    data = _gray_frame(path, second)
+    return sum(data) / len(data)
+
+
+def _mean_abs_pixel_diff(path: Path, first_s: float, second_s: float) -> float:
+    """Mean |a−b| over gray pixels of two frames — motion makes content move,
+    which shows here even when a linear gradient's *mean* luma stays constant
+    under zoom."""
+    a, b = _gray_frame(path, first_s), _gray_frame(path, second_s)
+    return sum(abs(x - y) for x, y in zip(a, b, strict=False)) / min(len(a), len(b))
+
+
+def _pcm(path: Path, rate: int = 8000) -> bytes:
+    proc = subprocess.run(
+        ["ffmpeg", "-nostdin", "-i", str(path), "-f", "s16le", "-ac", "1", "-ar", str(rate), "-"],
+        capture_output=True,
+        check=True,
+    )
+    return proc.stdout
+
+
+def _rms(pcm: bytes, start: float, end: float, rate: int = 8000) -> float:
+    lo, hi = round(start * rate) * 2, round(end * rate) * 2
+    window = pcm[lo:hi]
+    n = len(window) // 2
+    if n == 0:
+        return 0.0
+    total = sum(s * s for s in struct.unpack(f"<{n}h", window[: n * 2]))
+    return math.sqrt(total / n)
+
+
+class _ScriptedRunner:
+    """Duck-typed FFmpeg that logs every command and returns canned probe durations.
+
+    Used to pin the *command topology* of each stitch mode (which filters run,
+    which don't) without depending on the probed files' real content.
+    """
+
+    def __init__(self, probes: dict[str, float]) -> None:
+        self._probes = probes
+        self.commands: list[list[str]] = []
+
+    def run(self, args):
+        cmd = [str(a) for a in args]
+        self.commands.append(cmd)
+        Path(cmd[-1]).write_bytes(b"\x00\x00\x00\x18ftypisom")
+        return None
+
+    def probe_duration(self, path):
+        name = Path(str(path)).name
+        if name not in self._probes:
+            raise AssertionError(f"unexpected probe target: {name}")
+        return self._probes[name]
+
+
+def _filters(command: list[str]) -> list[str]:
+    """Every ``-filter_complex`` payload in a logged command."""
+    return [command[i + 1] for i, c in enumerate(command) if c == "-filter_complex"]
 
 
 # --- assembly.video.stitch_video ------------------------------------------------
@@ -357,10 +470,10 @@ class TestStitchVideoHardening:
             def probe_duration(self, path):
                 name = Path(str(path)).name
                 if name == "beat_002.mp4":
-                    return 1.5  # off-manifest: beat 2 is 1.0s in the manifest
+                    return 1.0  # off-manifest: beat 2 must carry 1.0s + the 0.5s transition pad
                 if name == "final.mp4":
                     return 2.0  # the total is right — only the per-beat check catches it
-                return 1.0
+                return 1.5  # beat 1 renders its beat + transition padding (2 × 1.0s beats)
 
         root = tmp_path / "proj"
         _silent_wav(root / "audio" / "beat_01.wav", 1.0)
@@ -438,6 +551,171 @@ class TestStitchVideoHardening:
         _, _, duration = _probe_streams(FFmpeg(), out)
         assert out.is_file() and out.stat().st_size > 0
         assert duration == pytest.approx(3.0, abs=1 / 30 + MS)
+
+
+# --- assembly.video — Ken Burns fallback (4.2, §6.3) -------------------------------
+
+
+class TestKenBurnsFallback:
+    """Task 4.2 (§6.3): video deliverables composed from generated stills get
+    Ken Burns motion (ffmpeg zoompan) and crossfade transitions — so a video
+    works without a video-capable key — while the timing manifest stays the
+    single source of truth: beat audio plays exactly in its manifest slot,
+    transitions blend the *picture* centered on each beat boundary, and the
+    probed total matches the manifest total."""
+
+    def test_single_still_beat_gets_ken_burns_motion(self, tmp_path: Path):
+        manifest = build_manifest("job_x", [BeatSpec(text="one")])  # 3.0s silent default
+        out = tmp_path / "out.mp4"
+        stitch_video(
+            manifest,
+            {1: BeatVisual(1, _png(tmp_path / "v.png", 320, 180), "image")},
+            project_root=tmp_path,
+            out_path=out,
+            target_width=320,
+            target_height=180,
+        )
+        video, _, duration = _probe_streams(FFmpeg(), out)
+        assert video["codec_name"] == "h264"
+        assert duration == pytest.approx(3.0, abs=1 / 30 + MS)
+        # The still actually moves: mock PNGs are gradients, so a pan/zoom
+        # shifts content measurably across the beat (a static loop would
+        # differ only by encoder noise, well under the threshold).
+        diff = _mean_abs_pixel_diff(out, 0.2, 2.8)
+        assert diff >= 2.0, f"no visible motion between frames: {diff:.2f}"
+
+    def test_still_beats_crossfade_and_audio_timeline_stays_exact(self, tmp_path: Path):
+        root = tmp_path / "proj"
+        _tone_wav(root / "audio" / "beat_01.wav", 1.2)
+        manifest = build_manifest(
+            "job_x",
+            [
+                BeatSpec(text="one", audio_file="audio/beat_01.wav", duration_s=1.2),
+                BeatSpec(text="two"),  # silent 3.0s default
+            ],
+        )
+        visuals = {
+            # target-aspect stills: no letterbox bars, so luma isolates the blend
+            1: BeatVisual(1, _solid_png(tmp_path / "black.png", "black", 320, 180), "image"),
+            2: BeatVisual(2, _solid_png(tmp_path / "white.png", "white", 320, 180), "image"),
+        }
+        out = tmp_path / "out.mp4"
+        stitch_video(
+            manifest,
+            visuals,
+            project_root=root,
+            out_path=out,
+            target_width=320,
+            target_height=180,
+        )
+        video, audio, duration = _probe_streams(FFmpeg(), out)
+        assert (video["codec_name"], audio["codec_name"]) == ("h264", "aac")
+        assert abs(duration - manifest.total_duration_s) <= 2 / 30 + MS
+        # Solid-color stills carry no visible motion, so luma isolates the
+        # crossfade: it spans [b1 - 0.25s, b1 + 0.25s] around the 1.2s boundary
+        # → 10% / 50% / 90% blends of black→white at 1.0 / 1.2 / 1.4s.
+        pre, mid, post = (_gray_mean_at(out, t) for t in (1.0, 1.2, 1.4))
+        assert pre < 60.0, f"beat 1 tail is not still black: {pre:.1f}"
+        assert 80.0 < mid < 170.0, f"boundary frame is not a blend: {mid:.1f}"
+        assert post > 190.0, f"beat 2 head is not still white: {post:.1f}"
+        # The audio timeline is untouched by the picture crossfade: the tone
+        # plays exactly in beat 1, then the silent beat stays silent.
+        pcm = _pcm(out)
+        loud = _rms(pcm, 0.2, 1.0)
+        assert loud > 1000.0
+        assert _rms(pcm, 1.6, 3.9) < 0.05 * loud, "audio leaked past the beat boundary"
+
+    def test_all_still_job_uses_zoompan_xfade_and_exact_audio_track(self, tmp_path: Path):
+        """Command topology of the composed-from-stills mode (fake runner)."""
+        root = tmp_path / "proj"
+        manifest = build_manifest("job_x", [BeatSpec(text="a"), BeatSpec(text="b")])  # 2 × 3.0s
+        visuals = {
+            1: BeatVisual(1, _png(tmp_path / "v1.png"), "image"),
+            2: BeatVisual(2, _png(tmp_path / "v2.png"), "image"),
+        }
+        runner = _ScriptedRunner(
+            {
+                "beat_001.mp4": 3.5,  # each segment = manifest beat + 0.5s transition pad
+                "beat_002.mp4": 3.5,
+                "motion.mp4": 6.0,
+                "audio_track.wav": 6.0,
+                "out.mp4": 6.0,
+            }
+        )
+        stitch_video(
+            manifest,
+            visuals,
+            project_root=root,
+            out_path=tmp_path / "out.mp4",
+            target_width=320,
+            target_height=180,
+            ffmpeg=runner,
+        )  # type: ignore[arg-type]
+        segment_cmds = [c for c in runner.commands if any("zoompan=" in f for f in _filters(c))]
+        assert len(segment_cmds) == 2
+        for cmd in segment_cmds:
+            assert "-loop" not in cmd  # stills are no longer static loops
+        xfade_cmds = [c for c in runner.commands if any("xfade=" in f for f in _filters(c))]
+        assert len(xfade_cmds) == 1
+        graph = _filters(xfade_cmds[0])[0]
+        assert "xfade=transition=fade:duration=0.500:offset=2.750" in graph  # centered on 3.0s
+        assert "trim=duration=6.000" in graph  # back to the manifest total
+        audio_cmds = [
+            c for c in runner.commands if any("concat=n=2:v=0:a=1" in f for f in _filters(c))
+        ]
+        assert len(audio_cmds) == 1  # audio built as its own exact-duration track
+        assert any("anullsrc" in a for a in audio_cmds[0])  # silent beat → silent piece
+        mux_cmds = [c for c in runner.commands if "0:v" in c]
+        assert len(mux_cmds) == 1
+        assert "copy" in mux_cmds[0] and "aac" in mux_cmds[0]
+
+    def test_clip_beats_keep_hard_cuts_and_the_concat_path(self, tmp_path: Path):
+        """A job with generated clips keeps the 3.3 topology: per-beat A/V
+        segments + one concat — no zoompan on clips, no crossfades."""
+        root = tmp_path / "proj"
+        _silent_wav(root / "audio" / "beat_01.wav", 1.2)
+        _silent_wav(root / "audio" / "beat_02.wav", 0.8)
+        manifest = build_manifest(
+            "job_x",
+            [
+                BeatSpec(text="one", audio_file="audio/beat_01.wav", duration_s=1.2),
+                BeatSpec(text="two", audio_file="audio/beat_02.wav", duration_s=0.8),
+            ],
+        )
+        visuals = {
+            1: BeatVisual(1, _png(tmp_path / "v.png"), "image"),
+            2: BeatVisual(2, _clip(tmp_path / "c.mp4", 0.5), "video"),
+        }
+        runner = _ScriptedRunner({"beat_001.mp4": 1.2, "beat_002.mp4": 0.8, "out.mp4": 2.0})
+        stitch_video(
+            manifest,
+            visuals,
+            project_root=root,
+            out_path=tmp_path / "out.mp4",
+            target_width=320,
+            target_height=180,
+            ffmpeg=runner,
+        )  # type: ignore[arg-type]
+        assert any(any("zoompan=" in f for f in _filters(c)) for c in runner.commands)
+        assert any("-stream_loop" in c for c in runner.commands)  # clip loop-pad unchanged
+        assert not any(any("xfade=" in f for f in _filters(c)) for c in runner.commands)
+        concat = [c for c in runner.commands if any("concat=n=2:v=1:a=1" in f for f in _filters(c))]
+        assert len(concat) == 1
+
+    def test_single_still_video_gets_motion_without_transitions(self, tmp_path: Path):
+        manifest = build_manifest("job_x", [BeatSpec(text="only")])  # 3.0s silent default
+        runner = _ScriptedRunner({"beat_001.mp4": 3.0, "out.mp4": 3.0})
+        stitch_video(
+            manifest,
+            {1: BeatVisual(1, _png(tmp_path / "v.png"), "image")},
+            project_root=tmp_path,
+            out_path=tmp_path / "out.mp4",
+            target_width=320,
+            target_height=180,
+            ffmpeg=runner,
+        )  # type: ignore[arg-type]
+        assert any(any("zoompan=" in f for f in _filters(c)) for c in runner.commands)
+        assert not any(any("xfade=" in f for f in _filters(c)) for c in runner.commands)
 
 
 # --- assembly.images.export_image -------------------------------------------------
