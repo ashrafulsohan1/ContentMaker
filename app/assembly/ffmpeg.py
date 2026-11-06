@@ -19,6 +19,12 @@ never through raw subprocess calls, so every ffmpeg/ffprobe invocation gets:
 parent's stdin would hang the background worker. Pass ``-y`` yourself to
 overwrite outputs; the wrapper owns no semantic flags.
 
+Binary resolution (v1.0.1): default ``ffmpeg_bin``/``ffprobe_bin`` come from
+the 3-tier resolver :mod:`app.core.binaries` (``CONTENTMAKER_FFMPEG_DIR`` env
+dir → bundled ``ffmpeg_bin`` → PATH) at instantiation time; nothing resolving
+raises :class:`~app.core.binaries.PackagingError` naming all three tiers.
+Explicit bins still win — pass ``ffmpeg_bin=``/``ffprobe_bin=`` to pin.
+
 Durations are probed, never trusted (BUILD_PLAN §1.2 "Durations"):
 ``probe_duration`` returns raw ffprobe seconds as a float — callers round to
 whole milliseconds when writing the timing manifest (tasks 1.7/2.4).
@@ -28,12 +34,12 @@ from __future__ import annotations
 import json
 import subprocess
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-DEFAULT_FFMPEG_BIN = "ffmpeg"
-DEFAULT_FFPROBE_BIN = "ffprobe"
+from app.core.binaries import resolve_ffmpeg, resolve_ffprobe
+
 _DEFAULT_TIMEOUT_S = 300.0
 _STDERR_TAIL_LINES = 8
 
@@ -64,8 +70,8 @@ class FFmpeg:
     never touches directories; callers create output directories.
     """
 
-    ffmpeg_bin: str = DEFAULT_FFMPEG_BIN
-    ffprobe_bin: str = DEFAULT_FFPROBE_BIN
+    ffmpeg_bin: str = field(default_factory=resolve_ffmpeg)
+    ffprobe_bin: str = field(default_factory=resolve_ffprobe)
     timeout_s: float = _DEFAULT_TIMEOUT_S
 
     def run(self, args: Sequence[str | Path]) -> subprocess.CompletedProcess[str]:
@@ -152,8 +158,9 @@ class FFmpeg:
             ) from exc
         except OSError as exc:
             raise FFmpegError(
-                f"cannot run {argv[0]!r} — is it installed and on PATH?"
-                f" (scripts/check_env.py): {exc}"
+                f"cannot run {argv[0]!r} — resolved via CONTENTMAKER_FFMPEG_DIR /"
+                " bundled ffmpeg_bin / PATH but failed to launch (see /healthz):"
+                f" {exc}"
             ) from exc
 
 

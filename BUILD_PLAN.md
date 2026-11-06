@@ -237,3 +237,22 @@ If the user declines the formatter hook, that's the whole story: no hooks; ruff 
 1. Update `DECISIONS.md` status; log approval in `PROJECT_LOG.md`.
 2. Phase 0 → M1, inline (executing-plans + tdd), background tasks for long commands, verification-before-completion at every claim, review-agent + GUI sweep at each gate.
 3. `BUILD_PLAN.md` is living — deviations recorded here and in `DECISIONS.md` with dates.
+
+## 12. Addendum — v1.0.1 packaging (2026-11-07)
+
+Post-v1.0.0-release increment (user approved "go with the recommended option"):
+ship a packaged Windows exe. Scope stays packaging-only — no feature changes.
+
+| # | Task | Files |
+|---|------|-------|
+| P1 | Frozen-aware writable base: `app_home()` = `CONTENTMAKER_HOME` env → exe dir when frozen (`sys.frozen`) → repo root (dev behavior byte-identical); `projects_root()`/`app_state_dir()` default through it; never the `_MEIPASS` extraction dir (wiped per run); bundled read-only content (`app/data`, `app/web`) keeps resolving inside `_MEIPASS` | `app/config.py` |
+| P2 | 3-tier ffmpeg/ffprobe resolver (`CONTENTMAKER_FFMPEG_DIR` env dir → bundled `_MEIPASS/ffmpeg_bin` → PATH via shutil.which), loud `PackagingError` naming all three tiers; `FFmpeg` wrapper defaults + mock video provider resolve through it so dry-run works in the exe | `app/core/binaries.py`, `app/assembly/ffmpeg.py`, `app/engines/mocks.py` |
+| P3 | `GET /healthz` — resolved ffmpeg/ffprobe paths (null when missing) + `frozen` flag | `app/main.py` |
+| P4 | Launcher entry point — `--port` (default 8765) / `--no-browser`, opens the UI after uvicorn binds, clean Ctrl+C shutdown | `app/launcher.py` |
+| P5 | One-file PyInstaller build: checked-in `ContentMaker.spec` (templates/static/data as datas, `ffmpeg_bin` included only when staged), driver script stages/clears bundled binaries, loud hint when PyInstaller missing; `dist/`/`build/`/`build_staging/` gitignored | `scripts/build_exe.py`, `ContentMaker.spec`, `.gitignore` |
+| P6 | Docs + tests: README §10 (build command, exe usage, size/GPL note for bundled gyan.dev builds), DECISIONS D15, PROJECT_LOG session; TDD tests for frozen base-dir, `CONTENTMAKER_HOME`, resolver tier order + PackagingError, launcher args, build-script args (no builds inside tests) | `README.md`, `tests/test_{config,binaries,app,launcher,build_exe}.py` |
+
+**Gate:** full pytest green (baseline 638 + new), `ruff check .` clean, no build
+artifacts committed. Bundled gyan.dev ffmpeg is GPL — accepted for this
+private/personal distribution (D15); public redistribution requires GPL
+compliance or an unbundled build.

@@ -16,3 +16,8 @@ state/
 # OS
 Thumbs.db
 .DS_Store
+
+# PyInstaller build outputs (scripts/build_exe.py) — never commit
+dist/
+build/
+build_staging/

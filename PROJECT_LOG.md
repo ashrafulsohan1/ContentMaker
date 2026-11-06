@@ -112,3 +112,22 @@ Paused by user token quota — run healthy at last check; restart protocol above
 
 ### Status
 **RELEASED 2026-11-07 — ContentMaker v1.0.0**: https://github.com/0xSpecters/ContentMaker/releases/tag/v1.0.0 (repo `0xSpecters/ContentMaker`, private; branch history pushed as `main`, tag at `57c8059`). All 20 tasks gated; smokes 14/14 + m2/m3/m4 exit 0; UI sweep performed, medium/high fixed and re-gated; suite **638 passed + 1 skipped**. **Owner backlog — 6 low findings declined by fixers as product-scope (all fact-verified):** m2-f3 options UI lacks per-engine provider selector (Settings defaults + confirm-page disclosure are the §6.5 mechanism); m3-f2/ui-f5 carousel ZIP bundle has no UI affordance (API `GET /api/jobs/{id}/export` works); m4-f2 video clips planned at flat 3s vs probed beat length (documented limitation in `flow.py:450` + README §5; honest fix = two-phase estimation); ui-f4 no-JS monitor notices drop; ui-f6 repeated POST /options leaves unconfirmed draft jobs. Remaining user actions: Gemini key for real-provider smokes; flip visibility to public if wanted.
+
+## Session — 2026-11-07 (v1.0.1 packaging)
+**Goal:** Implement the v1.0.1 packaging feature set (user: "go with the recommended option") — a packaged Windows exe — TDD-style, on top of the released v1.0.0.
+
+### Changes
+- `app/config.py` — frozen-aware writable base: new `app_home()` (CONTENTMAKER_HOME env → exe dir when `sys.frozen` → repo root, dev byte-identical) + `is_frozen()`; `projects_root()`/`app_state_dir()` default through it; bundled read-only content keeps resolving inside `_MEIPASS`.
+- `app/core/binaries.py` (new) — 3-tier ffmpeg/ffprobe resolver: `CONTENTMAKER_FFMPEG_DIR` → bundled `sys._MEIPASS/ffmpeg_bin` → PATH; loud `PackagingError` naming all three tiers; `required=False` variant backs `/healthz`.
+- `app/assembly/ffmpeg.py` — `FFmpeg` defaults resolve through the resolver (explicit bins still win); `app/engines/mocks.py` — mock video provider resolves its binary the same way (dry-run works in the exe).
+- `app/main.py` — `GET /healthz` returning `{ffmpeg, ffprobe, frozen}` (nulls when unresolvable).
+- `app/launcher.py` (new) — exe/dev entry: `--port` (default 8765) / `--no-browser`, browser opens after uvicorn binds (delayed thread), clean Ctrl+C.
+- `scripts/build_exe.py` (new) + checked-in `ContentMaker.spec` — one-file `dist/ContentMaker.exe`; `--bundle-ffmpeg` stages resolved binaries into `build_staging/ffmpeg_bin` (spec includes it only when staged; plain build clears stale staging); `dist/`/`build/`/`build_staging/` gitignored.
+- Docs: README §10 Packaging (build command, exe usage, where files live, 3-tier lookup, size + GPL licensing note for bundled gyan.dev builds), BUILD_PLAN §12 addendum (P1–P6), DECISIONS.md D15, this log.
+- TDD: red tests first (6 config failures + 4 import errors), then green; tests cover frozen base-dir resolution, CONTENTMAKER_HOME, resolver tier order + PackagingError, launcher args/behavior, build-script args/staging — no builds inside tests.
+
+### Decisions & notes
+- D15 recorded (packaging decision incl. GPL stance for bundled ffmpeg). PyInstaller was NOT in the venv at implementation time — build verification status recorded honestly in the ledger.
+
+### Status
+Code complete on `milestone/1-skeleton`; suite green + ruff clean at commit; real `--bundle-ffmpeg` build + exe smoke owned by the packaging run's verification step.

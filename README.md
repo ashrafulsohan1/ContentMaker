@@ -82,6 +82,12 @@ From the project folder with the venv activated:
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8765
 ```
 
+Equivalent one-liner with auto-open browser and clean Ctrl+C handling:
+
+```powershell
+python -m app.launcher --port 8765        # add --no-browser to skip the browser
+```
+
 Then open **http://127.0.0.1:8765/** in your browser.
 
 The server binds to `127.0.0.1` (localhost only) — it is not reachable from
@@ -248,3 +254,54 @@ exit 0 when green. They use throwaway temp project folders and leave the repo's
   to a specific `.ttf`/`.otf` path to override it.
 - **uvicorn not found** — the venv is not activated; re-run the activation
   line from §2 step 4.
+- **Packaged exe reports `ffmpeg not found`** — the built-in resolver checks
+  `CONTENTMAKER_FFMPEG_DIR`, then a bundled copy, then PATH (§10); open
+  http://127.0.0.1:8765/healthz to see which tier answered (or `null`).
+
+## 10. Packaging — build your own ContentMaker.exe
+
+You can skip the Python setup entirely and run ContentMaker as a single
+Windows executable. Build it from the repo (one-time PyInstaller install;
+the build takes a few minutes):
+
+```powershell
+.venv\Scripts\Activate.ps1
+pip install pyinstaller
+python scripts/build_exe.py                 # → dist\ContentMaker.exe
+python scripts/build_exe.py --bundle-ffmpeg # → ffmpeg + ffprobe also inside
+```
+
+Then double-click `dist\ContentMaker.exe`, or run it from a terminal:
+
+```powershell
+.\dist\ContentMaker.exe                     # opens the UI at http://127.0.0.1:8765
+.\dist\ContentMaker.exe --port 9000         # custom port
+.\dist\ContentMaker.exe --no-browser        # start without opening the browser
+```
+
+A console window stays open showing the server log; **Ctrl+C** (or closing the
+window) stops the app cleanly — jobs persist and resume on the next start.
+
+**Where files live in a packaged build:** `projects/` and `state/` are created
+**next to the exe**, not inside it (the exe unpacks its read-only contents to
+a temp folder that is deleted on exit). Set the `CONTENTMAKER_HOME` environment
+variable to relocate that writable home anywhere you like.
+
+**How the exe finds ffmpeg/ffprobe** (first match wins):
+
+1. The folder named in the **`CONTENTMAKER_FFMPEG_DIR`** environment variable
+   — point it at any folder holding `ffmpeg.exe`/`ffprobe.exe`.
+2. A copy **bundled inside the exe** (only when built with `--bundle-ffmpeg`).
+3. Your **PATH** — same as the source install.
+
+`http://127.0.0.1:8765/healthz` reports what actually resolved (or `null`)
+plus a `frozen: true` flag. When nothing resolves, generation fails loudly,
+naming all three locations.
+
+**Bundled ffmpeg — size and licensing note:** `--bundle-ffmpeg` copies the
+`ffmpeg.exe`/`ffprobe.exe` the resolver finds (typically a gyan.dev build,
+which README §2 installs) into the exe and adds roughly 100–200 MB. gyan.dev
+builds are **GPL-licensed** — fine for this private/personal distribution, but
+if you ever redistribute the bundled exe publicly you must comply with the GPL
+(e.g. offer the corresponding sources) — or build without the flag and let the
+resolver find ffmpeg on each user's machine instead.

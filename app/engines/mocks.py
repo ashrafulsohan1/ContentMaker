@@ -6,7 +6,8 @@ Mocks write real media files so assembly (task 1.12) is real ffmpeg from M1:
   seed+prompt-derived gradient. No PIL dependency; text labels/overlays belong
   to assembly/images.py (task 1.12) via ffmpeg drawtext.
 - Video: real MP4 via the ffmpeg lavfi color source (ffmpeg is a named system
-  dependency, verified by scripts/check_env.py in phase 0).
+  dependency; the binary goes through the app.core.binaries 3-tier resolver so
+  dry-run works in the packaged exe too).
 
 Costs are exactly zero (§7 cost awareness) and no network is touched.
 """
@@ -17,6 +18,7 @@ import wave
 import zlib
 from struct import pack
 
+from app.core.binaries import resolve_ffmpeg
 from app.engines.base import (
     ImageRequest,
     ImageResult,
@@ -112,7 +114,7 @@ class MockVideoProvider:
             f":r={_FPS}:d={request.duration_s}"
         )
         cmd = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            resolve_ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
             "-f", "lavfi", "-i", source,
             # veryfast: mocks encode at platform dims on every dry-run job and
             # in tests — x264's default (medium) preset dominates that cost

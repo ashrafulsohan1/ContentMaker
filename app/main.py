@@ -33,6 +33,8 @@ from app.api import jobs as api_jobs
 from app.api import settings as api_settings
 from app.api import sse as api_sse
 from app.assembly.pipeline import assemble_job
+from app.config import is_frozen
+from app.core import binaries
 from app.core.jobs import Job, JobEngine
 from app.core.keys import KEYS_FILENAME, KeyStore
 from app.core.maintenance import DEFAULT_INTERVAL_S, DEFAULT_MIN_AGE_S, MaintenanceTask
@@ -48,6 +50,20 @@ from app.web import settings as web_settings
 from app.web.flow import FlowStore
 
 WEB_DIR = Path(web_routes.__file__).resolve().parent
+
+
+def _healthz() -> dict[str, str | bool | None]:
+    """Diagnostics for the packaged exe (v1.0.1): what actually resolves.
+
+    ``required=False`` — a missing ffmpeg/ffprobe is reported as ``null`` here
+    instead of failing the endpoint; the resolver's loud PackagingError stays
+    for the paths that need the binary to run.
+    """
+    return {
+        "ffmpeg": binaries.resolve("ffmpeg", required=False),
+        "ffprobe": binaries.resolve("ffprobe", required=False),
+        "frozen": is_frozen(),
+    }
 
 
 def _assembler_for(projects_root: Path):
@@ -139,6 +155,7 @@ def create_app(
         else None
     )
     app.state.sse_poll_s = float(sse_poll_s)
+    app.add_api_route("/healthz", _healthz, methods=["GET"], include_in_schema=False)
     app.include_router(api_jobs.router)
     app.include_router(api_settings.router)
     app.include_router(api_sse.router)
