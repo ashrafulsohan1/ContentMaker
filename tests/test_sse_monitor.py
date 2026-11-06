@@ -203,7 +203,10 @@ def wait_for(pred: Callable[[], bool], *, timeout_s: float = 15.0, message: str 
     raise AssertionError(message or "condition never became true")
 
 
-def wait_terminal(client: TestClient, job_id: str, *, timeout_s: float = 20.0) -> dict:
+# 90s: create_app wires the real-ffmpeg assembler, so a terminal wait spans
+# the encode too (same load sensitivity as test_ui_flow's 180s budget — see
+# the v1.0.1 RC flake note there); 20s proved tight under full-suite load.
+def wait_terminal(client: TestClient, job_id: str, *, timeout_s: float = 90.0) -> dict:
     deadline = time.monotonic() + timeout_s
     payload: dict = {}
     while time.monotonic() < deadline:

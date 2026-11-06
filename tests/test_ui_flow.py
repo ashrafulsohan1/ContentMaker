@@ -62,10 +62,15 @@ def visible_texts(html: str) -> list[str]:
     return re.findall(r"<textarea[^>]*>(.*?)</textarea>", html, re.DOTALL)
 
 
-# 60s: task 1.12 wired real-ffmpeg assembly into finalize, so full-flow jobs
-# now encode platform-sized deliverables — the 15s pre-assembly budget is
-# too tight under full-suite load.
-def wait_terminal(client: TestClient, job_id: str, timeout_s: float = 60.0) -> dict:
+# 180s: full-flow jobs encode real deliverables with ffmpeg between the last
+# asset write and the terminal status — the job legitimately sits "running"
+# at progress 100% while the assembler works (worker runs the assembler before
+# _finalize, app/core/jobs.py). The v1.0.1 RC run proved 60s is not enough
+# under full-suite load: this test timed out there with every asset done and
+# the status still "running" (mid-assembly), while the app itself is bounded —
+# each encode is timeout-capped and a crashed run fails the job. The bigger
+# ceiling rides out machine-load variance without unbounding a stuck run.
+def wait_terminal(client: TestClient, job_id: str, timeout_s: float = 180.0) -> dict:
     import time
 
     deadline = time.monotonic() + timeout_s
