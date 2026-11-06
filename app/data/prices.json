@@ -7,12 +7,13 @@
       "image": "usd_per_image — price per generated image",
       "video": "usd_per_second — price per second of clip; estimates ceil fractional seconds up"
     },
-    "warning": "Research spike 2.0 (2026-11-06) verified the model IDs and prices below against Google's official docs — see research/gemini-api.md for every derivation and citation. The gemini 'verified' flag is true since task 2.3 wired the real TTS provider (the placeholder era ended with the spike; test_cost.py pins the spike-verified models/prices).",
+    "warning": "Research spikes 2.0/4.0 (2026-11-06) verified the model IDs and prices below against Google's official docs — see research/gemini-api.md and research/gemini-video.md for every derivation and citation. The gemini 'verified' flag is true since task 2.3 wired the real TTS provider (the placeholder era ended with the spike; test_cost.py pins the spike-verified models/prices).",
     "recheck": [
       "2026-12-01: Gemini 2.5 family auto-routing begins; 2.5 TTS deprecation flow — do not add 2.5 models back.",
+      "2026-12-03: gemini-omni-1.1-flash requests auto-route to gemini-omni-1.2-flash and bill at 1.2 rates (spike 4.0 §1) — the video row already uses 1.2; re-verify $12.00/1M output video tokens held.",
       "2027-01-01: gemini-3.8-flash-tts / flash-lite-tts audio prices double ($9->$18, $6->$12 per 1M audio tokens) — re-derive tts price.",
       "TTS billing is per OUTPUT audio token (25 tokens/s); the per-1k-chars figure assumes English at 120 wpm (11.4 chars/s, conservative vs ~150 wpm mid-rate). ffprobe durations at task 2.4 reconcile actual spend.",
-      "video price covers 720p (5,792 output tokens/s x $17.50/1M = $0.10136/s); 1080p/4K billing is not documented on the pricing page — verify at task 4.1."
+      "video price covers 720p (5,792 output tokens/s x $12.00/1M = $0.069504/s, rounded up). The provider always requests 720p and assembly upscales to platform dims (spike 4.0 §7.5); native 1080p would bill $0.104/s (8,688 tok/s) — moving the resolution means moving this row and the provider's DEFAULT_RESOLUTION together."
     ]
   },
   "providers": {
@@ -43,10 +44,10 @@
           "note": "Page-stated 2K equivalent ($30.00/1M image tokens x 1,680 tokens); 2K chosen because platforms.json targets 1080px-class dims that 1K cannot cover (9:16@1K is 768x1376) — generate 2K, downscale in assembly. 1K = $0.0336, 4K = $0.113. Alternatives: gemini-3.1-flash-lite-image 1K-only $0.0336; gemini-3.1-flash-image $0.067 (1K)–$0.151 (4K); gemini-3-pro-image $0.134–$0.24. Paid only (no free tier). Imagen shut down; gemini-2.5-flash-image deprecated, shuts down 2027-03-15."
         },
         "video": {
-          "model": "gemini-omni-1.1-flash",
+          "model": "gemini-omni-1.2-flash",
           "unit": "usd_per_second",
-          "price": 0.102,
-          "note": "Standard tier: $17.50/1M output video tokens at 5,792 tokens per second of 720p video = $0.10136/s (pricing page: 'approximately $0.10 per second'), rounded up; input tokens $1.50/1M are negligible per clip. Paid only. Veo 3.1 Preview (the old prices.json entry) was shut down 2026-10-22 — Gemini Omni Flash is its replacement. Base clip duration and 1080p/4K billing not documented; verify at task 4.1."
+          "price": 0.07,
+          "note": "Spike 4.0 (research/gemini-video.md, 2026-11-06): standard tier $12.00/1M output video tokens at 5,792 tokens per second of 720p video = $0.069504/s (pricing page: 'approximately $0.07 per second, ~$0.70 for a 10s clip'), rounded up; input tokens $1.50/1M are negligible per clip. Paid only (no free tier). The provider always requests 720p and assembly upscales to platform dims — the docs mark 1080p/4k '(upscaled)', i.e. the API itself renders 720p and upscales, so local upscaling is the ~33%-cheaper default; native 1080p would bill $0.104/s (8,688 tok/s), 360p $0.023/s, 4K $0.209/s. Clips render 3-15s at 24 FPS; beats outside that window are rejected before spend (video.py guards). Veo 3.1 Preview was shut down 2026-10-22; gemini-omni-1.1-flash ($17.50/1M = $0.1014/s) auto-routes to 1.2 billing from 2026-12-03."
         }
       }
     }

@@ -42,6 +42,7 @@ from app.providers import catalog
 from app.providers.gemini.client import GeminiClient
 from app.providers.gemini.image import GeminiImageProvider
 from app.providers.gemini.tts import GeminiTTSProvider
+from app.providers.gemini.video import GeminiVideoProvider
 from app.web import routes as web_routes
 from app.web import settings as web_settings
 from app.web.flow import FlowStore
@@ -61,8 +62,8 @@ def _assembler_for(projects_root: Path):
 
 def default_registry(key_store: KeyStore | None = None) -> Registry:
     """Mocks for every engine (zero-cost, zero-network dry-run of §1.2) plus —
-    when a key store is available — the Gemini TTS (BUILD_PLAN 2.3) and image
-    (BUILD_PLAN 3.1) adapters.
+    when a key store is available — the Gemini TTS (BUILD_PLAN 2.3), image
+    (BUILD_PLAN 3.1) and video (BUILD_PLAN 4.1) adapters.
 
     The adapters read the key from the store at call time, so registering them
     before any key exists is safe: the flow's key gate (§6.5) rejects a
@@ -77,6 +78,7 @@ def default_registry(key_store: KeyStore | None = None) -> Registry:
         client = GeminiClient(key_store)
         registry.register("tts", GeminiTTSProvider(client))
         registry.register("image", GeminiImageProvider(client))
+        registry.register("video", GeminiVideoProvider(client))
     return registry
 
 

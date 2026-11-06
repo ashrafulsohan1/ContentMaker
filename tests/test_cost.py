@@ -128,17 +128,18 @@ def test_prices_file_has_mock_and_spike_verified_gemini():
     assert mock.verified is True, "mock pricing is exact, not a placeholder"
     for engine in ("tts", "image", "video"):
         assert mock.engines[engine].price == 0.0
-    # Research spike 2.0 (2026-11-06, research/gemini-api.md §8) verified the
-    # gemini models and prices — no placeholder remains (BUILD_PLAN 2.3 wired
-    # the real TTS provider; the placeholder assertion was relaxed there).
+    # Research spikes 2.0/4.0 (2026-11-06, research/gemini-api.md §8 +
+    # research/gemini-video.md §5) verified the gemini models and prices — no
+    # placeholder remains (BUILD_PLAN 2.3 wired the real TTS provider; the
+    # placeholder assertion was relaxed there; 4.1 flipped video to 1.2).
     gemini = table.providers["gemini"]
     assert gemini.verified is True
     assert gemini.engines["tts"].model == "gemini-3.8-flash-tts"
     assert gemini.engines["tts"].price == 0.02
     assert gemini.engines["image"].model == "gemini-nano-banana-2.1"
     assert gemini.engines["image"].price == 0.0504
-    assert gemini.engines["video"].model == "gemini-omni-1.1-flash"
-    assert gemini.engines["video"].price == 0.102
+    assert gemini.engines["video"].model == "gemini-omni-1.2-flash"
+    assert gemini.engines["video"].price == 0.07
 
 
 def test_prices_path_points_at_editable_config():
