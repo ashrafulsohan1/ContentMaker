@@ -266,9 +266,10 @@ the build takes a few minutes):
 
 ```powershell
 .venv\Scripts\Activate.ps1
-pip install pyinstaller
+pip install -r requirements-dev.txt         # pyinstaller — build-only dependency
 python scripts/build_exe.py                 # → dist\ContentMaker.exe
 python scripts/build_exe.py --bundle-ffmpeg # → ffmpeg + ffprobe also inside
+python scripts/smoke_exe.py                 # smoke gate: 9 checks against the built exe
 ```
 
 Then double-click `dist\ContentMaker.exe`, or run it from a terminal:
