@@ -447,6 +447,17 @@ def build_assets(
                     out_path=flow.project.subdir("visuals") / f"beat_{index:02d}.mp4",
                     params={
                         "prompt": beat.img_hint or beat.text,
+                        # Recorded deferral (M1 task 1.10 ledger note 4; no M4
+                        # task owns it): clips are always planned at the 3s
+                        # silent-beat default, NOT the beat's probed narration
+                        # length. Assembly loop-pads the short clip over the
+                        # beat's audio slot (footage repeats), and estimates
+                        # price exactly what is generated (3s/beat). Aligning
+                        # the two needs post-TTS re-estimation — estimate()
+                        # runs before any audio exists, so a request-time probe
+                        # would make real spend diverge from the confirmed
+                        # estimate — and flips >15s beats into hard provider
+                        # errors; a design decision left to the owner.
                         "duration_s": DEFAULT_SILENT_BEAT_DURATION_S,
                         "width": width,
                         "height": height,

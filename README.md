@@ -138,6 +138,14 @@ three engines (TTS, images, video):
 3. Back on the options step, untick dry-run and pick the Gemini provider for
    the engines you want. Engines without a usable key stay dry-run-only.
 
+**Video clip length (known limitation):** a video beat is currently generated
+as a ~3-second clip regardless of how long its narration is; final assembly
+then loop-pads the clip (footage repeats on screen) to fill the beat's full
+audio slot, and the cost estimate prices those ~3 seconds per beat — exactly
+what is generated and billed, not what a full beat-length clip would cost.
+Aligning clip length with the probed narration length is a recorded design
+deferral, not yet implemented.
+
 Key handling rules (enforced by the app, not just convention):
 
 - Keys are stored in **`state/keys.json`**, which `.gitignore` excludes and
@@ -212,6 +220,7 @@ pytest -q                       # full test suite (offline; no keys needed)
 python scripts/smoke_m1.py      # end-to-end flow on mock engines, zero network
 python scripts/smoke_m2.py      # keys/estimate/cap flow (fake probe, no real API)
 python scripts/smoke_m3.py      # platform-exact image/carousel + MP4 assembly
+python scripts/smoke_m4.py      # resume-mid-job + per-asset retry + spend cap
 ```
 
 All smoke checks drive the real HTTP app on the zero-network mock engines and
