@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from app.api.jobs import job_payload
 from app.core.cost import (
     CAP_EPSILON,
     PriceTable,
@@ -18,10 +19,12 @@ from app.core.cost import (
     SpendLog,
     cap_reached,
     estimate_image_cost,
+    estimate_total_cost,
     estimate_tts_cost,
     estimate_video_cost,
     load_prices,
     prices_path,
+    round_usd,
 )
 from app.core.jobs import JobEngine, JobStore
 from app.engines.base import ImageRequest, ImageResult
@@ -265,6 +268,53 @@ def test_cap_reached_tolerates_float_noise():
     assert cap_reached(0.3, 0.1 + 0.2, 0.0) is False
 
 
+def test_cap_reached_rejects_non_finite_inputs():
+    """NaN compares False against everything — a NaN cap would silently switch
+    the guardrail off, so non-finite values must raise loudly instead."""
+    with pytest.raises(ValueError, match="finite"):
+        cap_reached(float("nan"), 0.0, 0.01)
+    with pytest.raises(ValueError, match="finite"):
+        cap_reached(float("inf"), 0.0, 0.01)
+    with pytest.raises(ValueError, match="finite"):
+        cap_reached(1.0, float("nan"), 0.01)
+    with pytest.raises(ValueError, match="finite"):
+        cap_reached(1.0, 0.0, float("nan"))
+
+
+# --- 4.5: exact USD display primitives (running-spend/estimate accuracy) ----
+
+
+def test_round_usd_quantizes_to_whole_micro_dollars():
+    """Price-table amounts are micro-dollar quantities; binary floats only
+    carry them noisily. Nearest-whole-micro is the display primitive."""
+    assert round_usd(0.06) == 0.06
+    assert round_usd(0.1 + 0.2) == 0.3  # 0.30000000000000004 → 0.3
+    assert round_usd(0.02 + 0.02 + 0.02) == 0.06  # ...005 → 0.06
+    assert round_usd(0.9999999999999999) == 1.0  # a drifted total → exact dollar
+    assert round_usd(1.0000004) == 1.0  # sub-micro noise below the grid
+
+
+def test_round_usd_rejects_non_finite():
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValueError, match="finite"):
+            round_usd(bad)
+
+
+def test_estimate_total_cost_is_the_exact_conservative_sum():
+    assert estimate_total_cost([]) == 0.0
+    assert estimate_total_cost([0.02, 0.02, 0.02]) == 0.06
+    assert estimate_total_cost([0.1] * 10) == 1.0  # naive float += gives 0.9999999999999999
+    # conservative direction: a total landing between micro-dollars ceils UP
+    assert estimate_total_cost([0.0000004, 0.0000004]) == 0.000001
+
+
+def test_estimate_total_cost_rejects_non_finite():
+    with pytest.raises(ValueError, match="finite"):
+        estimate_total_cost([0.1, float("nan")])
+    with pytest.raises(ValueError, match="finite"):
+        estimate_total_cost([float("inf")])
+
+
 # --- spend log (projects/<name>/state/spend_log.jsonl, PROMPT §7) -------------
 
 
@@ -318,6 +368,16 @@ def test_spend_log_tolerates_torn_final_line(tmp_path: Path):
 
     assert len(log.entries()) == 1
     assert log.total() == pytest.approx(0.5)
+
+
+def test_spend_log_total_is_exact_not_float_noisy(tmp_path: Path):
+    """The audit total the monitor pairs against job.spent_usd must not drift
+    (naive += over 10 × $0.10 gives 0.9999999999999999)."""
+    log = SpendLog(tmp_path / "spend_log.jsonl")
+    for _ in range(10):
+        log.record(job_id="job_a", project="alpha", engine="image", provider_id="p", amount_usd=0.1)
+    assert log.total(job_id="job_a") == 1.0
+    assert log.total() == 1.0
 
 
 def test_spend_log_creates_parent_dirs(tmp_path: Path):
@@ -413,3 +473,114 @@ def test_engine_without_spend_log_still_runs(tmp_path: Path, registry: Registry)
         assert final.status == "completed"
     finally:
         eng.stop()
+
+
+# --- 4.5: estimate + running-spend accuracy and cap-mid-job state -------------
+
+
+def test_engine_estimate_total_never_under_counts_per_asset_sum(engine, projects_root: Path):
+    """The confirm-flow total must be the exact conservative sum of the very
+    per-asset rows shown beneath it — naive float accumulation under-counts
+    (10 beats × $0.10 → 0.9999999999999999)."""
+    root = projects_root / "alpha"
+    engine._registry.register("image", PricedImage(0.1))
+    job = engine.create_job(
+        "alpha",
+        [img_spec(root, i) for i in range(1, 11)],
+        providers={"image": "priced"},
+    )
+    estimated = engine.estimate(job.id)
+
+    assert estimated.status == "awaiting_confirmation"
+    assert estimated.estimate_usd == 1.0
+    assert estimated.estimate_usd == sum(asset.estimated_cost_usd for asset in estimated.assets)
+
+
+def test_running_spend_stays_an_exact_consistent_sum(engine, projects_root: Path):
+    """Running-spend display accuracy: the job total, the per-asset rows and
+    the audit log all carry the same exact number — no binary-float drift."""
+    root = projects_root / "alpha"
+    engine._registry.register("image", PricedImage(0.1))
+    job = engine.create_job(
+        "alpha",
+        [img_spec(root, i) for i in range(1, 11)],
+        providers={"image": "priced"},
+    )
+    engine.estimate(job.id)
+    engine.start(job.id)
+    final = engine.wait(job.id, TERMINAL)
+
+    assert final.status == "completed"
+    assert final.spent_usd == 1.0  # SQL "spent_usd = spent_usd + ?" drifts below 1.0
+    assert final.spent_usd == sum(asset.spent_usd for asset in final.assets)
+    log = engine.spend_log("alpha")
+    assert log is not None
+    assert log.total(job_id=final.id) == final.spent_usd  # exact parity, not approx
+    shown = job_payload(final)
+    assert shown["spent_usd"] == final.spent_usd
+
+
+def test_cap_exceeded_mid_job_leaves_partial_with_completed_assets_intact(
+    engine, projects_root: Path
+):
+    """Cap binding mid-run: beats 1–2 complete and are kept (bytes, spend,
+    no error), beats 3–5 are skipped before any paid call, the job finalizes
+    ``partial``, spend never overshoots the cap and every display surface
+    shows the same exact number."""
+    root = projects_root / "alpha"
+    priced = PricedImage(0.4)
+    engine._registry.register("image", priced)
+    job = engine.create_job(
+        "alpha",
+        [img_spec(root, i) for i in range(1, 6)],
+        providers={"image": "priced"},
+        spend_cap_usd=1.0,  # admits beats 1–2 (0.8), blocks 3–5 mid-job
+    )
+    engine.estimate(job.id)
+    engine.start(job.id)
+    final = engine.wait(job.id, TERMINAL)
+
+    assert final.status == "partial"
+    assert [a.status for a in final.assets] == [
+        "done",
+        "done",
+        "skipped",
+        "skipped",
+        "skipped",
+    ]
+    assert priced.calls == 2  # the blocked beats were never dialed
+    assert final.estimate_usd == 2.0  # 5 × 0.4 exact; naive += gives 2.0000000000000004
+    assert final.spent_usd == 0.8  # 0.4 + 0.4 in floats is 0.8000000000000001
+    assert final.spent_usd <= final.spend_cap_usd + CAP_EPSILON  # never overshoots
+    for asset in final.assets[:2]:
+        assert asset.out_path.read_bytes() == b"fake-png"  # completed work intact
+        assert asset.spent_usd == pytest.approx(0.4)
+        assert asset.attempts == 1
+        assert asset.error is None
+    for asset in final.assets[2:]:
+        assert asset.spent_usd == 0.0
+        assert asset.error is not None
+        assert "spend cap" in asset.error
+        assert "skipped before paid call" in asset.error
+
+    log = engine.spend_log("alpha")
+    assert log is not None
+    assert log.total(job_id=final.id) == final.spent_usd
+    shown = job_payload(final)
+    assert shown["spent_usd"] == final.spent_usd
+    assert shown["spend_cap_usd"] == pytest.approx(1.0)
+    assert sum(a["spent_usd"] for a in shown["assets"]) == pytest.approx(final.spent_usd)
+
+
+def test_create_job_rejects_non_finite_or_negative_spend_cap(engine, projects_root: Path):
+    """A NaN cap compares False against everything — it would silently switch
+    the hard cap off; the persistence boundary refuses it at creation."""
+    root = projects_root / "alpha"
+    for bad in (float("nan"), float("inf"), float("-inf"), -0.01):
+        with pytest.raises(ValueError, match="spend cap"):
+            engine.create_job(
+                "alpha",
+                [img_spec(root, 1)],
+                providers={"image": "priced"},
+                spend_cap_usd=bad,
+            )

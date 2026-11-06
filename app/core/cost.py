@@ -1,4 +1,4 @@
-"""Cost module: price table, conservative estimates, spend log, caps (BUILD_PLAN 1.6).
+"""Cost module: price table, conservative estimates, spend log, caps (BUILD_PLAN 1.6/4.5).
 
 Implements the cost-guardrail chain of spec §6.6 / BUILD_PLAN §1.2:
 - ``app/data/prices.json`` is the editable per-provider unit-price table —
@@ -7,8 +7,16 @@ Implements the cost-guardrail chain of spec §6.6 / BUILD_PLAN §1.2:
   (chars → whole 1k blocks, fractional video seconds → whole seconds) and the
   result is ceiled to whole micro-dollars, so an estimate never under-counts
   (risk #5). Mock providers price at exactly 0 → dry-run jobs cost 0.
+  ``estimate_total_cost`` sums per-asset estimates exactly (Decimal) with the
+  same ceiling, so the confirm-flow job total never sits below the sum of the
+  per-asset rows the user is shown (BUILD_PLAN 4.5).
+- ``round_usd`` is the display-accuracy primitive (4.5): price-table amounts
+  are micro-dollar quantities that binary floats carry noisily; rounding every
+  accumulation step keeps running spend an exact sum of whole micro-dollars.
 - ``cap_reached`` is the single hard per-job cap check, run by the job engine
   BEFORE each paid call; over-cap assets are skipped, completed ones kept.
+  Non-finite values raise instead of comparing — NaN is False against
+  everything, so it would silently switch the guardrail off (4.5).
 - ``SpendLog`` appends one JSON line per completed provider call to
   ``projects/<name>/state/spend_log.jsonl`` (PROMPT §7 state layout) — the
   machine-readable audit trail paired with job.db (BUILD_PLAN §1.2).
@@ -17,9 +25,10 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from decimal import ROUND_CEILING, Decimal
+from decimal import ROUND_CEILING, ROUND_HALF_EVEN, Decimal
 from pathlib import Path
 
 APP_DATA_DIR = Path(__file__).resolve().parents[1] / "data"
@@ -174,6 +183,44 @@ def _cost(table: PriceTable, provider_id: str, engine: str, units: int) -> float
     return float(total.quantize(_MICRO_USD, rounding=ROUND_CEILING))
 
 
+# --- exact USD display primitives (4.5: running-spend/estimate accuracy) -----
+
+
+def round_usd(amount: float) -> float:
+    """Quantize a USD amount to the whole micro-dollar grid (nearest).
+
+    Price-table amounts are micro-dollar quantities that binary floats only
+    carry noisily (0.02+0.02+0.02 → 0.060000000000000005). Rounding every
+    accumulation step keeps the running spend an exact sum of whole
+    micro-dollars, so the job total equals the sum of its per-asset rows and
+    the JSON/SSE display never shows drift. Non-finite input raises: a NaN
+    spend would silently disable the cap (NaN comparisons are always False).
+    """
+    amount = float(amount)
+    if not math.isfinite(amount):
+        raise ValueError(f"USD amount must be finite (got {amount!r})")
+    return float(Decimal(str(amount)).quantize(_MICRO_USD, rounding=ROUND_HALF_EVEN))
+
+
+def estimate_total_cost(per_asset_usd: Iterable[float]) -> float:
+    """Conservative job total: exact decimal sum, ceiled to whole micro-dollars.
+
+    Naive float accumulation under-counts (10 × $0.10 → 0.9999999999999999),
+    which would put the confirm-flow total below the sum of the very per-asset
+    estimates the user is shown (risk #5: an estimate never under-counts).
+    Exact decimal math + the ceiling keeps the total at or above every
+    displayed part. Non-finite input raises — the job engine's estimation step
+    turns that into a failed job before any paid call.
+    """
+    total = Decimal(0)
+    for value in per_asset_usd:
+        value = float(value)
+        if not math.isfinite(value):
+            raise ValueError(f"per-asset estimate must be finite (got {value!r})")
+        total += Decimal(str(value))
+    return float(total.quantize(_MICRO_USD, rounding=ROUND_CEILING))
+
+
 # --- hard per-job cap (§6.6; enforced BEFORE each paid call) ------------------
 
 
@@ -185,9 +232,18 @@ def cap_reached(
     No cap (``None``) never blocks; spending up to exactly the cap is allowed.
     ``CAP_EPSILON`` absorbs binary-float noise so 0.1+0.2 vs a 0.3 cap is not
     "over". The job engine calls this before every paid call (§10.4).
+    Non-finite cap/spent/next-cost raises instead of comparing: NaN is False
+    against everything, so a NaN value would silently switch the guardrail off.
     """
     if spend_cap_usd is None:
         return False
+    for name, value in (
+        ("spend cap", spend_cap_usd),
+        ("spent amount", spent_usd),
+        ("next cost", next_cost_usd),
+    ):
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be a finite number of USD (got {value!r})")
     return spent_usd + next_cost_usd > spend_cap_usd + CAP_EPSILON
 
 
@@ -252,13 +308,18 @@ class SpendLog:
     def total(
         self, *, job_id: str | None = None, project: str | None = None
     ) -> float:
-        total = 0.0
-        for entry in self.entries():
-            if job_id is not None and entry.get("job_id") != job_id:
-                continue
-            if project is not None and entry.get("project") != project:
-                continue
-            amount = entry.get("amount_usd")
-            if isinstance(amount, (int, float)) and not isinstance(amount, bool):
-                total += float(amount)
-        return total
+        """Exact sum of the matching amounts, on the whole micro-dollar grid.
+
+        ``math.fsum`` adds the doubles without accumulated error and
+        ``round_usd`` re-quantizes to the price-table grid, so the audit total
+        pairs exactly (==, not approx) with the job's running spend.
+        """
+        amounts = [
+            float(entry["amount_usd"])
+            for entry in self.entries()
+            if (job_id is None or entry.get("job_id") == job_id)
+            and (project is None or entry.get("project") == project)
+            and isinstance(entry.get("amount_usd"), (int, float))
+            and not isinstance(entry.get("amount_usd"), bool)
+        ]
+        return round_usd(math.fsum(amounts))

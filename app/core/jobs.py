@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sqlite3
 import threading
 import time
@@ -56,7 +57,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.core.cost import SpendLog, cap_reached
+from app.core.cost import SpendLog, cap_reached, estimate_total_cost, round_usd
 from app.engines.base import (
     ImageRequest,
     ProviderError,
@@ -280,6 +281,12 @@ class JobStore:
         providers: dict[str, str] | None = None,
         spend_cap_usd: float | None = None,
     ) -> Job:
+        if spend_cap_usd is not None and (not math.isfinite(spend_cap_usd) or spend_cap_usd < 0):
+            # NaN compares False against everything — persisted as the cap it
+            # would silently switch the guardrail off (BUILD_PLAN 4.5).
+            raise ValueError(
+                f"spend cap must be a finite non-negative number of USD (got {spend_cap_usd!r})"
+            )
         now = _utc_now_iso()
         with self._connect() as conn:
             conn.execute(
@@ -378,12 +385,23 @@ class JobStore:
             )
 
     def record_spend(self, job_id: str, amount_usd: float) -> None:
+        """Add one completed call's cost to the job's running spend.
+
+        The total is re-quantized to whole micro-dollars on every step
+        (``core.cost.round_usd``): the naive SQL ``spent_usd = spent_usd + ?``
+        accumulates binary-float drift (10 × $0.10 → 0.9999999999999999), and
+        the running-spend display must be the exact sum of the per-asset rows
+        and audit log (BUILD_PLAN 4.5). The single worker thread is the only
+        spend writer; a non-finite amount raises (rolled back) rather than
+        poisoning the cap math.
+        """
         with self._connect() as conn:
-            if conn.execute("SELECT 1 FROM jobs WHERE id = ?", (job_id,)).fetchone() is None:
+            row = conn.execute("SELECT spent_usd FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if row is None:
                 raise JobNotFound(job_id)
             conn.execute(
-                "UPDATE jobs SET spent_usd = spent_usd + ?, updated_at = ? WHERE id = ?",
-                (amount_usd, _utc_now_iso(), job_id),
+                "UPDATE jobs SET spent_usd = ?, updated_at = ? WHERE id = ?",
+                (round_usd(row["spent_usd"] + amount_usd), _utc_now_iso(), job_id),
             )
 
     # -- assets ----------------------------------------------------------------
@@ -578,17 +596,26 @@ class JobEngine:
         return job
 
     def estimate(self, job_id: str) -> Job:
-        """draft → estimating → sum per-asset provider estimates → awaiting_confirmation."""
+        """draft → estimating → sum per-asset provider estimates → awaiting_confirmation.
+
+        The job total is the exact conservative sum of the per-asset estimates
+        (``core.cost.estimate_total_cost``: Decimal + micro-dollar ceiling) —
+        naive float accumulation under-counts (10 × $0.10 → 0.9999999999999999)
+        and would disagree with the per-asset rows the confirm page shows
+        (BUILD_PLAN 4.5). A non-finite estimate raises here and fails the job
+        before any paid call, same as a broken price lookup.
+        """
         job = self._resolve(job_id)
         store = self.store(job.project)
         store.update_job_status(job_id, "estimating")
         try:
-            total = 0.0
+            estimates: list[float] = []
             for asset in store.list_assets(job_id):
                 provider = self._provider(job.providers, asset.kind)
                 estimate = float(provider.estimate_cost_usd(self._build_request(asset)))
                 store.update_asset(asset.id, estimated_cost_usd=estimate)
-                total += estimate
+                estimates.append(estimate)
+            total = estimate_total_cost(estimates)
         except Exception as exc:
             store.update_job_status(job_id, "failed", error=f"estimation failed: {exc}")
             return self.job(job_id)

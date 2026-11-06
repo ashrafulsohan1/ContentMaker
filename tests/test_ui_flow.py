@@ -516,6 +516,27 @@ class TestOptions:
         assert resp.status_code == 200
         assert "spend cap" in resp.text.lower()
 
+    def test_non_finite_spend_cap_is_rejected(self, tmp_path):
+        # NaN compares False against everything — it would silently switch the
+        # hard cap off; "inf" would serialize into the API payload as invalid
+        # JSON. Both must be refused like any other malformed cap.
+        for raw in ("nan", "inf", "-inf"):
+            client = make_client(tmp_path / raw)  # fresh projects root per value
+            start_flow(client)
+            resp = client.post(
+                "/options",
+                data={
+                    "platform_id": "youtube",
+                    "format_id": "youtube_shorts",
+                    "audio": "on",
+                    "visual": "video",
+                    "dry_run": "on",
+                    "spend_cap_usd": raw,
+                },
+            )
+            assert resp.status_code == 200
+            assert "spend cap" in resp.text.lower()
+
     def test_spend_cap_is_recorded_on_job(self, tmp_path):
         client = make_client(tmp_path)
         start_flow(client)

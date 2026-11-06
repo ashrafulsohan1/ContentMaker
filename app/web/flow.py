@@ -24,6 +24,7 @@ routes drive:
 
 from __future__ import annotations
 
+import math
 import threading
 import uuid
 from collections import OrderedDict
@@ -337,8 +338,14 @@ def validate_options(
                 f"This carousel holds at most {max_images} images — this script has"
                 f" {n_beats} beats. Merge beats or pick another format."
             )
-    if options.spend_cap_usd is not None and options.spend_cap_usd < 0:
-        errors.append("The spend cap cannot be negative.")
+    if options.spend_cap_usd is not None:
+        # NaN compares False against everything — accepted, it would silently
+        # switch the hard cap off (and serialize as invalid JSON); same for an
+        # infinite cap (BUILD_PLAN 4.5).
+        if not math.isfinite(options.spend_cap_usd):
+            errors.append("The spend cap must be a finite number of US dollars.")
+        elif options.spend_cap_usd < 0:
+            errors.append("The spend cap cannot be negative.")
     return errors
 
 
