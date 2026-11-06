@@ -9,7 +9,10 @@ retry loops (bounded attempts + exponential backoff), cryptic failures
 """
 from __future__ import annotations
 
+import json
 import sqlite3
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -544,3 +547,242 @@ def test_unknown_job_raises_jobnotfound(engine):
         engine.job("job_missing")
     with pytest.raises(JobNotFound):
         engine.cancel("job_missing")
+
+
+# --- BUILD_PLAN 4.3: resume after a real server kill -------------------------
+
+
+_KILL_CHILD_SOURCE = '''\
+"""Kill-mid-job child (BUILD_PLAN 4.3): runs a real JobEngine worker and
+blocks inside beat 2's provider call so the parent can kill the process.
+argv: <repo_root> <projects_root>"""
+import sys
+import time
+from pathlib import Path
+
+repo_root, projects_root = Path(sys.argv[1]), Path(sys.argv[2])
+sys.path.insert(0, str(repo_root))
+
+from app.core.jobs import AssetSpec, JobEngine  # noqa: E402
+from app.engines.base import TTSRequest, TTSResult  # noqa: E402
+from app.engines.registry import Registry  # noqa: E402
+
+
+class ChildTTS:
+    provider_id = "killprobe"
+
+    def generate(self, request: TTSRequest) -> TTSResult:
+        if request.out_path.name == "beat_02.wav":
+            time.sleep(120)  # the parent kills the process inside this call
+        request.out_path.parent.mkdir(parents=True, exist_ok=True)
+        request.out_path.write_bytes(b"child-wav")
+        return TTSResult(file=request.out_path, duration_s=1.0)
+
+    def estimate_cost_usd(self, request: TTSRequest) -> float:
+        return 0.25
+
+
+registry = Registry()
+registry.register("tts", ChildTTS())
+engine = JobEngine(
+    registry,
+    projects_root=projects_root,
+    max_attempts=3,
+    backoff_base_s=0.01,
+    sleep=lambda _s: None,
+)
+root = projects_root / "killproj"
+specs = [
+    AssetSpec(
+        kind="tts",
+        beat_index=index,
+        out_path=root / "audio" / f"beat_{index:02d}.wav",
+        params={"text": f"beat {index}", "voice": "demo"},
+    )
+    for index in (1, 2, 3)
+]
+job = engine.create_job("killproj", specs, providers={"tts": "killprobe"})
+engine.estimate(job.id)
+engine.start(job.id)
+store = engine.store("killproj")
+deadline = time.monotonic() + 30.0
+while time.monotonic() < deadline:
+    snapshot = {a.beat_index: a.status for a in store.list_assets(job.id)}
+    if snapshot == {1: "done", 2: "generating", 3: "pending"}:
+        break
+    time.sleep(0.02)
+else:
+    print("CHILD_NEVER_MIDJOB", snapshot, flush=True)
+    sys.exit(3)
+print("CHILD_MIDJOB", job.id, flush=True)
+time.sleep(120)  # killed here, mid-job, by the parent
+'''
+
+
+class ResumedTTS:
+    """Records the file names the resuming engine actually (re)generates."""
+
+    provider_id = "killprobe"
+
+    def __init__(self, calls: list[str]) -> None:
+        self.calls = calls
+
+    def generate(self, request: TTSRequest) -> TTSResult:
+        self.calls.append(request.out_path.name)
+        request.out_path.parent.mkdir(parents=True, exist_ok=True)
+        request.out_path.write_bytes(b"parent-wav")
+        return TTSResult(file=request.out_path, duration_s=1.0)
+
+    def estimate_cost_usd(self, request: TTSRequest) -> float:
+        return 0.25
+
+
+def _read_db(db_path: Path):
+    """(job_status, {beat_index: status}, [job_id]) or None while locked.
+
+    Single-job db; the child is the only writer, so a locked read just means
+    "retry in a moment".
+    """
+    try:
+        conn = sqlite3.connect(str(db_path))
+        try:
+            jobs = conn.execute("SELECT id, status FROM jobs").fetchall()
+            assets = conn.execute("SELECT beat_index, status FROM assets ORDER BY id").fetchall()
+        finally:
+            conn.close()
+    except sqlite3.OperationalError:
+        return None
+    if not jobs:  # schema bootstrapped, create_job not committed yet
+        return None
+    return jobs[0][1], {beat: status for beat, status in assets}, [row[0] for row in jobs]
+
+
+def test_resume_after_real_process_kill_mid_job(tmp_path: Path, projects_root: Path):
+    """BUILD_PLAN 4.3: a job survives a hard process kill mid-job.
+
+    A child process runs a real worker; the parent watches the persisted WAL
+    db, ``kill()``s the process while beat 2 is mid-generate (the closest
+    testable equivalent of a dead server), then a fresh JobEngine on the same
+    persisted state resumes: completed beat 1 is never redone, the in-flight
+    beat 2 restarts, spend is not double-counted.
+    """
+    repo_root = Path(__file__).resolve().parents[1]
+    child_script = tmp_path / "kill_child_job.py"
+    child_script.write_text(_KILL_CHILD_SOURCE, encoding="utf-8")
+    proc = subprocess.Popen(
+        [sys.executable, "-I", str(child_script), str(repo_root), str(projects_root)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=str(repo_root),
+    )
+    reaped = False
+
+    def kill_and_reap() -> tuple[str, str]:
+        nonlocal reaped
+        proc.kill()
+        out, err = proc.communicate(timeout=15)
+        reaped = True
+        return out, err
+
+    db = projects_root / "killproj" / "state" / "job.db"
+    mid_job = {1: "done", 2: "generating", 3: "pending"}
+    beat1 = projects_root / "killproj" / "audio" / "beat_01.wav"
+    try:
+        deadline = time.monotonic() + 60.0
+        while True:
+            snapshot = _read_db(db) if db.exists() else None
+            if snapshot is not None and snapshot[0] == "running" and snapshot[1] == mid_job:
+                break  # child blocked inside beat 2's provider call
+            if proc.poll() is not None:  # died before the window (import error, …)
+                out, err = proc.communicate()
+                reaped = True
+                pytest.fail(f"kill-child exited early: stdout={out!r} stderr={err!r}")
+            if time.monotonic() > deadline:
+                out, err = kill_and_reap()
+                pytest.fail(f"child never reached mid-job state: stdout={out!r} stderr={err!r}")
+            time.sleep(0.02)
+
+        # The child confirms the window from its own side. Safe to block: every
+        # child path prints a line or exits, so readline cannot hang.
+        line = proc.stdout.readline().strip()
+        if not line.startswith("CHILD_MIDJOB"):
+            out, err = kill_and_reap()
+            pytest.fail(f"kill-child did not confirm mid-job: line={line!r} stderr={err!r}")
+
+        out, err = kill_and_reap()
+        assert not err, (out, err)
+        # The durable state resume() starts from — committed WAL survives the kill.
+        snapshot = _read_db(db)
+        assert snapshot is not None, "killed process left no readable job row"
+        status, by_beat, job_ids = snapshot
+        assert (status, by_beat) == ("running", mid_job)
+        job_id = job_ids[0]
+        assert beat1.read_bytes() == b"child-wav"
+
+        registry = Registry()
+        resumed_calls: list[str] = []
+        registry.register("tts", ResumedTTS(resumed_calls))
+        engine2 = JobEngine(
+            registry,
+            projects_root=projects_root,
+            max_attempts=3,
+            backoff_base_s=0.01,
+            sleep=lambda _s: None,
+        )
+        try:
+            assert [j.id for j in engine2.resume()] == [job_id]
+            assert [(a.beat_index, a.status) for a in engine2.job(job_id).assets] == [
+                (1, "done"),  # completed work kept
+                (2, "pending"),  # in-flight work reset for a clean redo
+                (3, "pending"),
+            ]
+
+            final = engine2.wait(job_id, TERMINAL, timeout=15.0)
+            assert final.status == "completed"
+            assert [(a.beat_index, a.status, a.attempts) for a in final.assets] == [
+                (1, "done", 1),  # attempts untouched: not re-run
+                (2, "done", 1),
+                (3, "done", 1),
+            ]
+            # the resuming engine re-called only beats 2 and 3 — beat 1 kept
+            assert resumed_calls == ["beat_02.wav", "beat_03.wav"]
+            assert beat1.read_bytes() == b"child-wav"  # completed artifact untouched
+            assert (
+                projects_root / "killproj" / "audio" / "beat_02.wav"
+            ).read_bytes() == b"parent-wav"
+            # beat 1's spend (recorded by the killed process) is kept; the
+            # resume re-records only the two redone beats.
+            assert final.spent_usd == pytest.approx(0.75)
+            spend_lines = [
+                json.loads(line)
+                for line in (projects_root / "killproj" / "state" / "spend_log.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+            assert sorted(e["asset_id"] for e in spend_lines) == sorted(a.id for a in final.assets)
+        finally:
+            engine2.stop()
+    finally:
+        if not reaped:
+            if proc.poll() is None:
+                proc.kill()
+            proc.communicate(timeout=15)
+
+
+def test_resume_leaves_non_running_jobs_alone(engine, projects_root: Path):
+    """resume() is only for jobs caught mid-run by a restart: draft /
+    awaiting_confirmation stay for the user to re-drive, terminal stay final."""
+    root = projects_root / "alpha"
+    draft = engine.create_job("alpha", [tts_spec(root, 1)])
+    gated = engine.create_job("alpha", [tts_spec(root, 2)])
+    engine.estimate(gated.id)
+    finished = engine.create_job("alpha", [tts_spec(root, 3)])
+    engine.estimate(finished.id)
+    engine.start(finished.id)
+    assert run_to_end(engine, finished.id).status == "completed"
+
+    assert engine.resume() == []
+    assert engine.job(draft.id).status == "draft"
+    assert engine.job(gated.id).status == "awaiting_confirmation"
+    assert engine.job(finished.id).status == "completed"

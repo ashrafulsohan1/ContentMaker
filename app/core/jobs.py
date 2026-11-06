@@ -9,8 +9,11 @@ Implements spec §6.6:
   (stdlib sqlite3, WAL mode — OneDrive-safe, risk #7) before it is visible.
 - One background worker thread processes queued jobs sequentially; closing
   the tab cannot kill it. ``resume()`` re-enqueues jobs found ``running`` on
-  disk after a server restart (mocked-level resume; the real kill-mid-job
-  test is task 4.3).
+  disk after a server restart, resetting stuck ``generating`` assets to
+  ``pending`` for a clean redo (BUILD_PLAN 4.3 pins this with a real
+  process-kill test: a child worker is killed mid-generate and a fresh
+  engine on the same persisted state resumes without redoing completed
+  assets or double-counting their spend).
 - Bounded retry with exponential backoff for retryable ProviderError values;
   non-retryable errors fail the asset immediately. A failed asset never
   kills the job — the run finalizes as ``partial`` (or ``failed`` if nothing
