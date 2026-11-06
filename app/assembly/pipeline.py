@@ -12,7 +12,9 @@
    ``audio_file`` keeps the provenance), and failed/skipped beats rejoin after
    their retry re-assembles.
 2. **Video formats** — one MP4 per format (``stitch_video``): manifest beats,
-   per-beat visuals (images looped, clips loop-padded), per-beat audio.
+   per-beat visuals (stills animated with Ken Burns pan/zoom — crossfaded
+   between beats when the whole job is composed from stills, the §6.3 no-video-key
+   fallback; clips loop-padded), per-beat audio.
 3. **Image/carousel formats** — one platform-correct export per completed
    beat (``export_image``), with the plan's optional per-image text overlay
    (spec §6.4; ruling in DECISIONS D13 — ffmpeg drawtext stays, no Pillow).

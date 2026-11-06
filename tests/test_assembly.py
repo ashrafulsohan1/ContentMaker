@@ -4,9 +4,11 @@
   source of truth: every beat renders exactly its manifest duration (silent
   beats included), visuals are normalized to the target resolution/fps
   (scale + pad, never crop), short clips are loop-padded, long inputs are
-  trimmed, and the concat output is H.264/AAC MP4 whose probed duration stays
+  trimmed, and the output is H.264/AAC MP4 whose probed duration stays
   within a frame-per-beat of the manifest total — deviation beyond that is an
-  ``AssemblyError``.
+  ``AssemblyError``. Stills get Ken Burns pan/zoom motion (4.2); a job
+  composed entirely of stills additionally gets crossfades centered on each
+  beat boundary while its audio track stays pinned to the manifest timeline.
 - ``assembly.images.export_image`` — platform-correct PNG/JPEG export: scale +
   pad to exact platform dims, container honored (jpg → mjpeg, png → png);
   optional text overlay via ffmpeg drawtext (the 3.2 ruling, DECISIONS D13),

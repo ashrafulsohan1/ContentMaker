@@ -66,3 +66,27 @@ In progress — run `dwfrun-98de313d` live; will pause automatically when the us
 - [ ] Targeted M1 self-review (risk files: jobs.py, cost.py) — subagent review unavailable per D12
 - [ ] M2 inline: research spike → settings/keys → Gemini client/TTS (offline contract tests)
 - [ ] Browser sweep deferred (token economy) — revisit at release polish
+
+(Superseded 2026-11-05: D12 lifted by user — build resumes only via the dynamic workflow.)
+
+## Session — 2026-11-06
+**Goal:** Keep the workflow build running across daily token pauses; audit and harden the workflow script after two cache-frontier incidents and one gate timeout.
+
+### Changes
+- M1 fully closed: independent review found 5 defects (fixed TDD-style, commits `3457371`, `1e8d8b3`); M2 progressed through spike (`3c6eb29`), BYOK settings (`717a9ce`), Gemini client (`c2be757`); suite grew to **455 tests**.
+- Fresh-eyes audit of the workflow script: 19 findings (3 high, 8 medium, 8 low) — all adopted via amendment or documented as deviations. High: unguarded `gh` spawn, missing gate timeouts (the 455-test/387s suite exceeded the 300s default and killed a run), unguarded ask results.
+- `alreadyDone` semantics finalized: skip entirely (no ask, no gate) for 1.5–2.2 — their proof is deterministic (455-test suite, smoke 14/14, per-task gates in prior journals). `spike:true` read-only variant for research tasks. Release phase: deterministic keys gate, current-branch verification, tag reuse.
+- Uncommitted edits from an interrupted worker session preserved as WIP commit `9bceebb` before this pause.
+
+### Decisions & notes
+- **Restart protocol (prevents incident recurrence):** quota pause (`provider` stop) → `ResumeWorkflowRun("dwfrun-b1dd41e3-4a24-4e2c-8e16-5e01ade7c8c1")` — never CreateWorkflow, never amend on a clean pause. Errored → edit `.zcode/workflow-drafts/Take-stock-of-the-build.dwf.ts` + `AmendWorkflow(path)` under the cache rules: no persona/ask-byte changes for tasks with chain records; no live `world.run`/workspace write before the cached prefix; `alreadyDone` flips only when the task has no chain record. After any amend: verify `cached_steps > 0`.
+- "No agent working" during a gate is normal — deterministic `world.run` compute with frozen token spend.
+
+### Next steps
+- [ ] On restart: `ResumeWorkflowRun("dwfrun-b1dd41e3-4a24-4e2c-8e16-5e01ade7c8c1")`
+- [ ] worker-2.3 reconciles WIP `9bceebb` + partial TTS work, then 2.4 → M2 gate → M3 → M4 → release
+- [ ] prices.json verified:false flip check after 2.3; merge milestone/1-skeleton → main at M2 completion
+- [ ] Release captain escalates for repo name/visibility (private recommended); user Gemini key for real-provider smokes
+
+### Status
+Paused by user token quota — run healthy at last check; restart protocol above.
