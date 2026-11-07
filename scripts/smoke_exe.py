@@ -34,7 +34,7 @@ Runs the REAL built exe the way a user would, and reports a per-check result:
                          must shift to the first free port upward (8766) instead
                          of dying on bind — /healthz answers 200 with frozen
                          JSON on 8766 within the boot timeout, the console
-                         notice "Port 8765 in use — using 8766" is printed, and
+                         notice "Port 8765 in use - using 8766" is printed, and
                          the fallback server stops cleanly afterwards.
 
 Usage:   .venv/Scripts/python.exe scripts/smoke_exe.py
@@ -68,7 +68,7 @@ BASE_URL = "http://127.0.0.1:8799"
 PORT = 8799
 # v1.0.2 port-collision check: the launcher's DEFAULT port (app.config
 # DEFAULT_PORT = 8765), squatted by a plain socket before the exe starts, and
-# the first fallback port upward the launcher must shift to (pick_port scans
+# the first fallback port upward the launcher must shift to (reserve_port scans
 # requested..requested+30, app/launcher.py).
 COLLISION_PORT = 8765
 FALLBACK_PORT = 8766
@@ -76,6 +76,13 @@ BOOT_TIMEOUT_S = 120.0  # one-file extraction + uvicorn bind (cold AV scans can 
 POLL_S = 0.5
 SHUTDOWN_TIMEOUT_S = 15.0
 LOG_NAME = "server.log"
+
+# Env proxies must never intercept a localhost poll (v102-f5): a build machine
+# with an env/registry HTTP_PROXY that does not bypass 127.0.0.1 otherwise
+# makes every _healthz poll return URLError and the boot/collision waits
+# false-fail after their timeout although the exe is up. Same rule the
+# launcher itself applies (app/launcher.py _OPENER).
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 @dataclass
@@ -94,7 +101,7 @@ def _healthz(timeout_s: float = 5.0, port: int = PORT) -> tuple[int, dict | None
     """GET /healthz -> (status, payload-or-None); network errors are poll noise."""
     request = urllib.request.Request(f"http://127.0.0.1:{port}/healthz", method="GET")
     try:
-        with urllib.request.urlopen(request, timeout=timeout_s) as resp:
+        with _OPENER.open(request, timeout=timeout_s) as resp:
             return resp.status, json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
         return 0, None
@@ -201,7 +208,7 @@ def check_bundled_ffprobe(ctx: dict) -> str:
 def check_ui_root(ctx: dict) -> str:
     request = urllib.request.Request(f"{BASE_URL}/", method="GET")
     try:
-        with urllib.request.urlopen(request, timeout=10.0) as resp:
+        with _OPENER.open(request, timeout=10.0) as resp:
             status = resp.status
             body = resp.read()
     except urllib.error.URLError as exc:
@@ -278,7 +285,7 @@ def check_collision_fallback(ctx: dict) -> str:
     WITHOUT --port, so it must shift to the first free port upward (8766)
     instead of dying on bind — /healthz on 8766 answers 200 with a JSON payload
     carrying frozen=true within the boot timeout, and the console notice
-    "Port 8765 in use — using 8766" is printed. Self-contained: own process,
+    "Port 8765 in use - using 8766" is printed. Self-contained: own process,
     own scratch CONTENTMAKER_HOME, own cleanup (squatter socket closed, process
     stopped, fallback port freed, scratch removed) whatever the outcome — a
     failure message embeds the collision server log tail, since the report's
@@ -337,11 +344,13 @@ def check_collision_fallback(ctx: dict) -> str:
         # fallback notice) only flush when the process exits cleanly.
         _stop_proc(proc)
         deadline = time.monotonic() + 10.0
-        # ASCII-only match: the exe's redirected stdout uses the ANSI code page
-        # (launcher.py's em dash lands as cp1252 0x97, i.e. U+FFFD after the
-        # errors="replace" read), so an exact UTF-8 match would false-fail.
+        # Tolerant match: the launcher's notice is ASCII-only since v102-f2
+        # (em dashes crashed print() on ANSI code pages that cannot encode
+        # U+2014, so the console vocabulary is ASCII now), but the exe's
+        # redirected stdout still decodes via the ANSI code page, so the
+        # .{0,3} gap stays rather than pinning the exact separator.
         # "Port 8765 in use ... using 8766" appears on no other line.
-        notice = f"Port {COLLISION_PORT} in use — using {FALLBACK_PORT}"
+        notice = f"Port {COLLISION_PORT} in use - using {FALLBACK_PORT}"
         pattern = re.compile(
             rf"Port {COLLISION_PORT} in use.{{0,3}}using {FALLBACK_PORT}"
         )

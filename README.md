@@ -106,7 +106,7 @@ other machines.
   resume on the next start.
 - **The port may shift.** If 8765 is already taken by another program, the
   launcher moves to the next free port (8766…8795) and prints, e.g.,
-  `Port 8765 in use — using 8766`. The browser always opens on the real URL —
+  `Port 8765 in use - using 8766`. The browser always opens on the real URL —
   read the port from that console line if you need to type it yourself.
 
 ### Using the app
