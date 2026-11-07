@@ -88,10 +88,26 @@ Equivalent one-liner with auto-open browser and clean Ctrl+C handling:
 python -m app.launcher --port 8765        # add --no-browser to skip the browser
 ```
 
-Then open **http://127.0.0.1:8765/** in your browser.
+Then open **http://127.0.0.1:8765/** in your browser — or just wait: the
+launcher opens it once the server is really up.
 
 The server binds to `127.0.0.1` (localhost only) — it is not reachable from
-other machines. Change the port by editing the `--port` flag if 8765 is taken.
+other machines.
+
+### First run
+
+- **Cold start can take up to a minute.** The packaged exe unpacks itself on
+  first launch (and a dev start does its first import), so the browser does
+  not open instantly: the console prints
+  `First launch can take up to a minute (unpacking).` and then
+  `Waiting for server...` until the browser opens by itself.
+- **The console window is the server** — keep it open while you use the app.
+  Ctrl+C (or closing the window) stops the app cleanly; jobs persist and
+  resume on the next start.
+- **The port may shift.** If 8765 is already taken by another program, the
+  launcher moves to the next free port (8766…8795) and prints, e.g.,
+  `Port 8765 in use — using 8766`. The browser always opens on the real URL —
+  read the port from that console line if you need to type it yourself.
 
 ### Using the app
 
@@ -242,7 +258,9 @@ exit 0 when green. They use throwaway temp project folders and leave the repo's
   `winget install Gyan.FFmpeg` (or download from
   https://www.gyan.dev/ffmpeg/builds/), then **open a new terminal** so PATH
   updates apply, and re-run the check.
-- **Port already in use** — pick another: `--port 8766`.
+- **Port already in use** — the launcher shifts to the next free port on its
+  own (8765→8766…8795, announced on the console) and the browser opens on the
+  real port. To pin a port yourself, start with `--port 8766`.
 - **Key rejected at Test** — the error names exactly what's wrong. The common
   case for Gemini: the key is an unrestricted “standard” key — add a Gemini
   API restriction in AI Studio, or create an “authorization key” with one.
@@ -282,6 +300,10 @@ Then double-click `dist\ContentMaker.exe`, or run it from a terminal:
 
 A console window stays open showing the server log; **Ctrl+C** (or closing the
 window) stops the app cleanly — jobs persist and resume on the next start.
+First launch can take up to a minute (the exe unpacks itself): the console
+prints `Waiting for server...` until it is ready, then the browser opens — and
+if 8765 is busy the launcher shifts to the next free port and says so (§3,
+"First run").
 
 **Where files live in a packaged build:** `projects/` and `state/` are created
 **next to the exe**, not inside it (the exe unpacks its read-only contents to
