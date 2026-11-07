@@ -27,7 +27,15 @@ Runs the REAL built exe the way a user would, and reports a per-check result:
                          (exit code 3) while the server child exits cleanly —
                          so the parent's raw exit code is reported, not asserted;
     9. SCRATCH HOME      the exe wrote nothing next to itself (no projects/ or
-                         state/ appear in dist/) — CONTENTMAKER_HOME was honored.
+                         state/ appear in dist/) — CONTENTMAKER_HOME was honored;
+    10. COLLISION        v1.0.2 port-collision fallback, end-to-end: with the
+                         launcher's DEFAULT port 8765 squatted by a plain socket
+                         BEFORE launch, the exe is started WITHOUT --port and
+                         must shift to the first free port upward (8766) instead
+                         of dying on bind — /healthz answers 200 with frozen
+                         JSON on 8766 within the boot timeout, the console
+                         notice "Port 8765 in use — using 8766" is printed, and
+                         the fallback server stops cleanly afterwards.
 
 Usage:   .venv/Scripts/python.exe scripts/smoke_exe.py
 Exit:    0 — every check passed; 1 — at least one check failed.
@@ -40,6 +48,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -57,6 +66,12 @@ ROOT = Path(__file__).resolve().parents[1]
 EXE = ROOT / "dist" / "ContentMaker.exe"
 BASE_URL = "http://127.0.0.1:8799"
 PORT = 8799
+# v1.0.2 port-collision check: the launcher's DEFAULT port (app.config
+# DEFAULT_PORT = 8765), squatted by a plain socket before the exe starts, and
+# the first fallback port upward the launcher must shift to (pick_port scans
+# requested..requested+30, app/launcher.py).
+COLLISION_PORT = 8765
+FALLBACK_PORT = 8766
 BOOT_TIMEOUT_S = 120.0  # one-file extraction + uvicorn bind (cold AV scans can be slow)
 POLL_S = 0.5
 SHUTDOWN_TIMEOUT_S = 15.0
@@ -75,9 +90,9 @@ def _fail(message: str) -> None:
     raise AssertionError(message)
 
 
-def _healthz(timeout_s: float = 5.0) -> tuple[int, dict | None]:
+def _healthz(timeout_s: float = 5.0, port: int = PORT) -> tuple[int, dict | None]:
     """GET /healthz -> (status, payload-or-None); network errors are poll noise."""
-    request = urllib.request.Request(f"{BASE_URL}/healthz", method="GET")
+    request = urllib.request.Request(f"http://127.0.0.1:{port}/healthz", method="GET")
     try:
         with urllib.request.urlopen(request, timeout=timeout_s) as resp:
             return resp.status, json.loads(resp.read().decode("utf-8"))
@@ -257,6 +272,110 @@ def check_scratch_home(ctx: dict) -> str:
     return f"nothing written next to the exe; scratch CONTENTMAKER_HOME was {ctx['scratch']}"
 
 
+def check_collision_fallback(ctx: dict) -> str:
+    """v1.0.2 port-collision fallback, end-to-end on the real exe: BEFORE launch
+    a plain socket squats the launcher's DEFAULT port 8765, the exe is started
+    WITHOUT --port, so it must shift to the first free port upward (8766)
+    instead of dying on bind — /healthz on 8766 answers 200 with a JSON payload
+    carrying frozen=true within the boot timeout, and the console notice
+    "Port 8765 in use — using 8766" is printed. Self-contained: own process,
+    own scratch CONTENTMAKER_HOME, own cleanup (squatter socket closed, process
+    stopped, fallback port freed, scratch removed) whatever the outcome — a
+    failure message embeds the collision server log tail, since the report's
+    _log_tail covers only the primary instance's log."""
+    if not _port_free(FALLBACK_PORT):
+        _fail(
+            f"port {FALLBACK_PORT} is already in use — the collision check needs "
+            f"a free {FALLBACK_PORT} to prove the {COLLISION_PORT}->{FALLBACK_PORT} fallback"
+        )
+    squatter = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    scratch = Path(tempfile.mkdtemp(prefix="smoke_collision_"))
+    log_path = scratch / LOG_NAME
+    log = log_path.open("w", encoding="utf-8", buffering=1)
+    proc: subprocess.Popen | None = None
+    try:
+        squatter.bind(("127.0.0.1", COLLISION_PORT))
+        squatter.listen(1)
+        env = dict(os.environ)
+        env["CONTENTMAKER_HOME"] = str(scratch)  # scratch home here too
+        env.pop("CONTENTMAKER_FFMPEG_DIR", None)
+        flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+        proc = subprocess.Popen(
+            [str(EXE), "--no-browser"],  # NO --port: the DEFAULT 8765 must collide
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            env=env,
+            creationflags=flags,
+        )
+        status, payload = 0, None
+        deadline = time.monotonic() + BOOT_TIMEOUT_S
+        while time.monotonic() < deadline:
+            status, payload = _healthz(port=FALLBACK_PORT)
+            if status == 200 and isinstance(payload, dict):
+                break
+            if proc.poll() is not None:
+                _fail(
+                    f"the exe exited early (code {proc.returncode}) while "
+                    f"{COLLISION_PORT} was squatted — it must fall back to "
+                    f"{FALLBACK_PORT}, not die on bind" + _log_tail(log_path)
+                )
+            time.sleep(POLL_S)
+        if status != 200 or not isinstance(payload, dict):
+            _fail(
+                f"GET /healthz never answered 200 JSON on the fallback port "
+                f"{FALLBACK_PORT} within {BOOT_TIMEOUT_S:.0f}s while "
+                f"{COLLISION_PORT} was squatted (last status {status})"
+                + _log_tail(log_path)
+            )
+        if payload.get("frozen") is not True:
+            _fail(
+                f"/healthz on the fallback port {FALLBACK_PORT} must report "
+                f"frozen=true, got {payload!r}"
+            )
+        # Graceful stop before reading the console notice: the exe's stdout is
+        # block-buffered when redirected to a file, so its early prints (the
+        # fallback notice) only flush when the process exits cleanly.
+        _stop_proc(proc)
+        deadline = time.monotonic() + 10.0
+        # ASCII-only match: the exe's redirected stdout uses the ANSI code page
+        # (launcher.py's em dash lands as cp1252 0x97, i.e. U+FFFD after the
+        # errors="replace" read), so an exact UTF-8 match would false-fail.
+        # "Port 8765 in use ... using 8766" appears on no other line.
+        notice = f"Port {COLLISION_PORT} in use — using {FALLBACK_PORT}"
+        pattern = re.compile(
+            rf"Port {COLLISION_PORT} in use.{{0,3}}using {FALLBACK_PORT}"
+        )
+        while True:
+            log_text = log_path.read_text(encoding="utf-8", errors="replace")
+            if pattern.search(log_text):
+                break
+            if time.monotonic() > deadline:
+                _fail(
+                    f"the launcher did not print the fallback notice {notice!r}"
+                    + _log_tail(log_path)
+                )
+            time.sleep(0.5)
+        deadline = time.monotonic() + 10.0
+        while not _port_free(FALLBACK_PORT):
+            if time.monotonic() > deadline:
+                _fail(
+                    f"fallback port {FALLBACK_PORT} is still bound after the "
+                    f"process exited (orphaned server?)"
+                )
+            time.sleep(0.5)
+        return (
+            f"{COLLISION_PORT} squatted before launch, exe started without --port "
+            f"-> fell back to {FALLBACK_PORT}: /healthz 200 frozen=true, console "
+            f"notice {notice!r}, fallback server stopped cleanly"
+        )
+    finally:
+        if proc is not None:
+            _stop_proc(proc)
+        log.close()
+        squatter.close()
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
 CHECKS: tuple[tuple[str, Callable[[dict], str]], ...] = (
     ("exe-present", check_exe_present),
     ("launch-scratch-home", check_launch),
@@ -267,6 +386,7 @@ CHECKS: tuple[tuple[str, Callable[[dict], str]], ...] = (
     ("ui-root", check_ui_root),
     ("clean-exit", check_clean_exit),
     ("scratch-home-honored", check_scratch_home),
+    ("collision-fallback", check_collision_fallback),
 )
 
 
@@ -277,6 +397,31 @@ def _port_free(port: int) -> bool:
         except OSError:
             return False
     return True
+
+
+def _stop_proc(proc: subprocess.Popen) -> None:
+    """Stop a smoke-launched exe for good: graceful console interrupt first
+    (CREATE_NEW_PROCESS_GROUP put it in its own group, so CTRL_BREAK reaches
+    the one-file parent AND the uvicorn child), then terminate()/kill()
+    escalation. Never leaves a server behind on any code path."""
+    if proc.poll() is not None:
+        return
+    if sys.platform == "win32":
+        try:
+            os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
+        except (OSError, ValueError):
+            pass  # fall through to terminate() below
+    try:
+        proc.wait(timeout=SHUTDOWN_TIMEOUT_S)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    proc.terminate()
+    try:
+        proc.wait(timeout=5.0)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5.0)
 
 
 def _log_tail(log_path: Path, lines: int = 15) -> str:
